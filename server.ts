@@ -82,12 +82,12 @@ app.use(cookieParser());
 // treats an empty string as "unset" and falls through to `undefined` — which
 // then surfaces as a cryptic "client password must be a string" crash deep in
 // pg's SASL code. Fail fast here instead, with guidance on how to fix it.
-if (!process.env.PGPASSWORD) {
+if (!process.env.DATABASE_URL && !process.env.PGPASSWORD) {
   console.error(
-    "\n[Postgres] PGPASSWORD is not set.\n" +
-    "  1. Copy .env.example to .env if you haven't already: cp .env.example .env\n" +
-    "  2. Set PGPASSWORD in .env to the real password for your local Postgres user.\n" +
-    "  3. Restart the dev server (env vars are only loaded at startup).\n"
+    "\n[Postgres] Neither DATABASE_URL nor PGPASSWORD is set.\n" +
+    "  Local dev: copy .env.example to .env and set PGPASSWORD to your local Postgres password.\n" +
+    "  Hosted (Render/Supabase/etc.): set DATABASE_URL to your provider's connection string.\n" +
+    "  Restart the server after changing env vars — they're only loaded at startup.\n"
   );
 }
 
@@ -111,16 +111,35 @@ pool.on("error", (err) => {
   console.error("[Postgres] Unexpected error on idle client", err);
 });
 
+function describeConnectionTarget(): string {
+  if (process.env.DATABASE_URL) {
+    try {
+      const u = new URL(process.env.DATABASE_URL);
+      return `${u.username}@${u.hostname}:${u.port || "5432"}${u.pathname} (via DATABASE_URL)`;
+    } catch {
+      return "DATABASE_URL (unparsable — check it's a valid postgres:// URI)";
+    }
+  }
+  return `${process.env.PGUSER || "postgres"}@${process.env.PGHOST || "localhost"}:${process.env.PGPORT || "5432"}/${process.env.PGDATABASE || "attendance_db"} (via PG* vars)`;
+}
+
 async function testDbConnection() {
   try {
     await pool.query("SELECT 1");
-    console.log(`[Postgres] Connected to database "${process.env.PGDATABASE || "attendance_db"}"`);
+    console.log(`[Postgres] Connected as ${describeConnectionTarget()}`);
   } catch (err: any) {
-    console.error("[Postgres] Failed to connect. Did you create the database and run schema.sql?");
+    console.error(`[Postgres] Failed to connect to ${describeConnectionTarget()}`);
     if (err.message?.includes("must be a string") || err.message?.includes("SASL")) {
       console.error(
-        "[Postgres] This usually means PGPASSWORD is missing or empty. " +
-        "Set a real password in your .env file (see .env.example) and restart the server."
+        "[Postgres] This usually means PGPASSWORD/DATABASE_URL is missing or empty. " +
+        "Set a real password and restart the server."
+      );
+    } else if (err.message?.includes("password authentication failed")) {
+      console.error(
+        "[Postgres] The username/password above were rejected by the database. Check that:\n" +
+        "  - DATABASE_URL has your REAL password substituted for any [YOUR-PASSWORD] placeholder\n" +
+        "  - You copied the connection string fresh (a password reset invalidates the old one)\n" +
+        "  - If on Supabase, prefer the pooler URI (username looks like postgres.xxxxxxx), not the raw Direct connection"
       );
     } else {
       console.error(err.message);
@@ -708,13 +727,16 @@ async function closeSessionAndGenerateReports(sessionId: string) {
   checkinsResult.rows.forEach((c) => {
     checkinsMap.set(c.student_id, {
       timestamp: c.timestamp instanceof Date ? c.timestamp.toISOString() : c.timestamp,
-      photoBase64: c.photo_base64,
     });
   });
 
   let presentCount = 0;
   let absentCount = 0;
 
+  // Note: records intentionally do NOT embed photoBase64 — `checkins` is the
+  // single source of truth for photos. The reports endpoint joins it back in
+  // live when a report is actually viewed, so a photo is only ever stored
+  // once instead of duplicated into every report row.
   const records = participantsList.map((p) => {
     const checkedIn = checkinsMap.get(p.studentId);
     if (checkedIn) {
@@ -725,7 +747,6 @@ async function closeSessionAndGenerateReports(sessionId: string) {
         email: p.email,
         status: "present",
         timestamp: checkedIn.timestamp,
-        photoBase64: checkedIn.photoBase64,
       };
     } else {
       absentCount++;
@@ -735,7 +756,6 @@ async function closeSessionAndGenerateReports(sessionId: string) {
         email: p.email,
         status: "absent",
         timestamp: null,
-        photoBase64: null,
       };
     }
   });
@@ -836,6 +856,39 @@ setInterval(async () => {
   console.log("[Scheduler] Executing automatic check...");
   await runSchedulerLogic();
 }, 60000);
+
+// ==========================================
+// PHOTO RETENTION
+// ==========================================
+// Check-in photos are only needed briefly, to let a coordinator visually spot-
+// check a live/recent session. Keeping them forever is the single biggest
+// driver of database storage usage (they're stored once now, not duplicated
+// into reports — see closeSessionAndGenerateReports — but still add up over a
+// semester). This job clears the photo bytes for anything older than 24
+// hours; every other attendance field (status, timestamp, name) is untouched
+// and reports keep working normally, they just stop showing a photo for
+// older check-ins.
+const PHOTO_RETENTION_HOURS = 24;
+
+async function purgeOldPhotos() {
+  try {
+    const result = await pool.query(
+      `UPDATE checkins SET photo_base64 = NULL
+       WHERE photo_base64 IS NOT NULL AND "timestamp" < now() - interval '${PHOTO_RETENTION_HOURS} hours'`
+    );
+    if (result.rowCount && result.rowCount > 0) {
+      console.log(`[Photo retention] Cleared ${result.rowCount} check-in photo(s) older than ${PHOTO_RETENTION_HOURS}h.`);
+    }
+  } catch (err) {
+    console.error("[Photo retention] Failed to purge old photos:", err);
+  }
+}
+
+// Runs once shortly after boot, then every 30 minutes. Hourly-ish granularity
+// is plenty for a 24h retention window and avoids scanning the table every
+// single scheduler tick.
+setTimeout(purgeOldPhotos, 15000);
+setInterval(purgeOldPhotos, 30 * 60 * 1000);
 
 // ==========================================
 // PUBLIC / ATTENDANCE API ENDPOINTS
@@ -1062,6 +1115,23 @@ app.get("/api/reports/:groupId", requireAuth, async (req, res) => {
     const groupRow = await requireGroupOwner(groupId, user, res);
     if (!groupRow) return;
     const dailyResult = await pool.query("SELECT * FROM daily_reports WHERE group_id = $1", [groupId]);
+
+    // Photos are stored once, in `checkins`, never duplicated into report
+    // records. Batch-join them back in here for display so old reports still
+    // show a photo whenever the underlying check-in still has one (it may
+    // have been purged by the 24h photo retention job — see purgeOldPhotos).
+    const reportSessionIds = dailyResult.rows.map((r) => r.session_id);
+    const photoBySessionAndStudent = new Map<string, string | null>();
+    if (reportSessionIds.length > 0) {
+      const photoResult = await pool.query(
+        "SELECT session_id, student_id, photo_base64 FROM checkins WHERE session_id = ANY($1)",
+        [reportSessionIds]
+      );
+      photoResult.rows.forEach((c) => {
+        photoBySessionAndStudent.set(`${c.session_id}::${c.student_id}`, c.photo_base64);
+      });
+    }
+
     const daily: any[] = dailyResult.rows.map((r) => ({
       id: r.id,
       groupId: r.group_id,
@@ -1070,7 +1140,10 @@ app.get("/api/reports/:groupId", requireAuth, async (req, res) => {
       sessionId: r.session_id,
       createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
       stats: r.stats,
-      records: r.records,
+      records: (r.records || []).map((rec: any) => ({
+        ...rec,
+        photoBase64: photoBySessionAndStudent.get(`${r.session_id}::${rec.studentId}`) ?? null,
+      })),
     }));
 
     const activeResult = await pool.query(
