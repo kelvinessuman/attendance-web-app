@@ -327,8 +327,12 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                                         <span className="text-[8px] text-white font-bold bg-slate-900/80 px-1 py-0.5 rounded">View</span>
                                       </div>
                                     </button>
+                                  ) : r.status === "present" ? (
+                                    <span className="text-slate-400 italic text-xs" title={`Photos are automatically cleared after 24 hours to save storage.`}>
+                                      Photo expired
+                                    </span>
                                   ) : (
-                                    <span className="text-slate-400 italic">No image</span>
+                                    <span className="text-slate-400 italic">—</span>
                                   )}
                                 </td>
                               </tr>
