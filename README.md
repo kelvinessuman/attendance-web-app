@@ -1,8 +1,4 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
-
-# QR Attendance App
+### QR Attendance App
 
 This app now uses a **local PostgreSQL database** for all data storage and a
 self-hosted **email/password authentication system** (no Firebase).
@@ -36,7 +32,7 @@ A `.env` file is already included, pre-filled with:
 PGHOST=localhost
 PGPORT=5432
 PGUSER=postgres
-PGPASSWORD=Possible1234..
+PGPASSWORD=enter_your_password_here
 PGDATABASE=attendance_db
 JWT_SECRET="please-change-this-to-a-long-random-string"
 ```
