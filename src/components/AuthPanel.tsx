@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { motion, AnimatePresence } from "motion/react";
-import ugLogo from "../assets/ug-logo.png";
+import ugLogo from "../assets/UG Logo.png";
 import { AlertCircle, CheckCircle2, QrCode } from "lucide-react";
 
 type Mode = "login" | "register" | "forgot";
