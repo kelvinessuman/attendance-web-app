@@ -112,8 +112,8 @@ export default function AuthPanel() {
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <img src={ugLogo} alt="University of Ghana" className="h-14 mx-auto mb-6 object-contain" />
-        {/* <div className="inline-flex items-center justify-center p-3.5 bg-navy rounded-3xl shadow-xl shadow-navy/10 text-white mb-6"> */}
-          {/* <QrCode className="w-10 h-10" /> */}
+        <div className="inline-flex items-center justify-center p-3.5 bg-navy rounded-3xl shadow-xl shadow-navy/10 text-white mb-6">
+        <QrCode className="w-10 h-10" />
         </div>
         <h2 className="text-3xl font-extrabold font-sans tracking-tight text-slate-900">
           QR Attendance System
