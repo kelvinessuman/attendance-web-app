@@ -19,6 +19,7 @@ import ReportsPanel from "./components/ReportsPanel";
 import AboutPage from "./components/AboutPage";
 import ResetPasswordPage from "./components/ResetPasswordPage";
 import AdminPanel from "./components/AdminPanel";
+import ChangePasswordPanel from "./components/ChangePasswordPanel";
 import { Group } from "./types";
 
 function AuthLoadingScreen() {
@@ -34,10 +35,11 @@ function AuthLoadingScreen() {
  *  Admins are redirected to /admin and never see operational dashboards.
  */
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, mustChangePassword } = useAuth();
   if (loading) return <AuthLoadingScreen />;
   if (!user) return <AuthPanel />;
   if (user.role === "admin") return <Navigate to="/admin" replace />;
+  if (mustChangePassword) return <ChangePasswordPanel />;
   return <>{children}</>;
 }
 
