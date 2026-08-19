@@ -39,7 +39,7 @@ export default function AuthPanel() {
         <div className="bg-navy px-6 py-5 flex items-center gap-3">
           <img src={ugLogo} alt="Logo" className="h-10 w-10 object-contain" />
           <div>
-            <h1 className="text-white font-bold text-lg tracking-tight">QR Attendance</h1>
+            <h1 className="text-white font-bold text-lg tracking-tight">QR Attendance System</h1>
             <p className="text-white/70 text-xs">Authorized users only</p>
           </div>
         </div>
@@ -47,7 +47,7 @@ export default function AuthPanel() {
         <div className="p-6">
           <h2 className="text-xl font-semibold text-slate-800 mb-1">Sign in</h2>
           <p className="text-sm text-slate-500 mb-5">
-            Accounts are created by an administrator. Contact your admin if you need access.
+            Contact the admin if you need access.
           </p>
 
           {error && (
