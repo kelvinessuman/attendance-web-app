@@ -327,8 +327,8 @@ function getAppUrl(req: express.Request): string {
   return process.env.APP_URL || `https://${req.get("host")}` || "http://localhost:3000";
 }
 
-// // AUTH HELPERS
-// const INSECURE_DEFAULT_JWT_SECRET = "dev-only-insecure-secret-change-me";
+// AUTH HELPERS
+const INSECURE_DEFAULT_JWT_SECRET = "dev-only-insecure-secret-change-me";
 const JWT_SECRET = process.env.JWT_SECRET || INSECURE_DEFAULT_JWT_SECRET;
 const COOKIE_NAME = "token";
 
