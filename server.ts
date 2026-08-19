@@ -13,8 +13,8 @@ import QRCode from "qrcode";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
-// // EXPRESS APP
-// const app = express();
+// EXPRESS APP
+const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
 const isProd = process.env.NODE_ENV === "production";
