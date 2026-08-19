@@ -1083,7 +1083,8 @@ app.post("/api/groups/:groupId/participants/bulk", requireAuth, async (req, res)
 });
 
 // // ROW MAPPERS
-// function rowToGroup(row: any) {
+// ROW MAPPERS
+function rowToGroup(row: any) {
   return {
     id: row.id,
     name: row.name,
