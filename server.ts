@@ -433,20 +433,39 @@ function setAuthCookie(res: express.Response, payload: AuthPayload) {
   });
 }
 
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = req.cookies?.[COOKIE_NAME];
   if (!token) {
     return res.status(401).json({ error: "Not authenticated. Please log in." });
   }
   try {
     const payload = jwt.verify(token, JWT_SECRET) as AuthPayload;
-    (req as any).user = payload;
+    // Re-check DB on every authenticated request so deactivate/role changes apply immediately
+    const result = await pool.query(
+      `SELECT id, email, full_name, role, is_active, temp_password
+       FROM users WHERE id = $1`,
+      [payload.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Account not found. Please log in again." });
+    }
+    const row = result.rows[0];
+    if (row.is_active === false) {
+      return res.status(403).json({ error: "This account has been deactivated. Contact your administrator." });
+    }
+    const fresh: AuthPayload = {
+      id: row.id,
+      email: row.email,
+      fullName: row.full_name,
+      role: row.role === "admin" ? "admin" : "user",
+    };
+    (req as any).user = fresh;
+    (req as any).mustChangePassword = !!row.temp_password;
     next();
   } catch (err) {
     return res.status(401).json({ error: "Session expired. Please log in again." });
   }
 }
-
 
 function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   const user = (req as any).user as AuthPayload | undefined;
@@ -456,11 +475,21 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
   next();
 }
 
+/** Coordinators only — admins cannot access groups, sessions, reports, or photos. */
+function requireCoordinator(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const user = (req as any).user as AuthPayload | undefined;
+  if (!user || user.role !== "user") {
+    return res.status(403).json({ error: "Coordinator access only. Admins cannot access operational data." });
+  }
+  next();
+}
+
 function generateTempPassword(length = 12): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = crypto.randomBytes(length);
   let out = "Tmp-";
   for (let i = 0; i < length; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)];
+    out += chars[bytes[i] % chars.length];
   }
   return out;
 }
@@ -607,7 +636,11 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
       role: (user.role === "admin" ? "admin" : "user") as "admin" | "user",
     };
     setAuthCookie(res, payload);
-    res.json({ success: true, user: payload });
+    res.json({
+      success: true,
+      user: payload,
+      mustChangePassword: !!user.temp_password && payload.role === "user",
+    });
   } catch (err: any) {
     console.error(err);
     res.status(500).json({ error: "Failed to log in." });
@@ -653,79 +686,74 @@ app.get("/api/health", async (_req, res) => {
 });
 
 app.get("/api/auth/me", requireAuth, (req, res) => {
-  res.json({ user: (req as any).user });
+  res.json({
+    user: (req as any).user,
+    mustChangePassword: !!(req as any).mustChangePassword,
+  });
+});
+
+// Force change of admin-issued temporary password
+app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+  const user = (req as any).user as AuthPayload;
+  const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    return res.status(400).json({ error: "Current password, new password, and confirm password are required." });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "New password must be at least 8 characters long." });
+  }
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ error: "New password and confirm password do not match." });
+  }
+  if (newPassword === currentPassword) {
+    return res.status(400).json({ error: "New password must be different from the current password." });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT password_hash, temp_password, role FROM users WHERE id = $1`,
+      [user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    const row = result.rows[0];
+    const matches = await bcrypt.compare(String(currentPassword), row.password_hash);
+    if (!matches) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+
+    const passwordHash = await bcrypt.hash(String(newPassword), 10);
+    await pool.query(
+      `UPDATE users
+       SET password_hash = $1, temp_password = false, password_expires_at = NULL
+       WHERE id = $2`,
+      [passwordHash, user.id]
+    );
+
+    res.json({ success: true, message: "Password updated successfully." });
+  } catch (err: any) {
+    console.error("[change-password]", err);
+    res.status(500).json({ error: "Failed to change password." });
+  }
 });
 
 // Forgot password - step 1: request a reset link. Always responds with the
 // same generic message regardless of whether the email has an account, so
 // this can't be used to enumerate registered emails either.
-app.post("/api/auth/forgot-password/request", authLimiter, async (req, res) => {
-  const { email } = req.body;
-  if (!email || !isValidEmail(email)) {
-    return res.status(400).json({ error: "Please enter a valid email address." });
-  }
-  const normalizedEmail = String(email).trim().toLowerCase();
-  const genericResponse = {
-    success: true,
-    message: "If an account exists for that email, we've sent a password reset link to it.",
-  };
-
-  try {
-    const result = await pool.query("SELECT id, full_name FROM users WHERE email = $1", [normalizedEmail]);
-    if (result.rows.length > 0 && EMAIL_ENABLED) {
-      const { id, full_name } = result.rows[0];
-      const token = await createAuthToken(id, "password_reset", 30);
-      const resetUrl = `${getAppUrl(req)}/reset-password?token=${token}`;
-      await sendEmail(
-        normalizedEmail,
-        "Reset your password — QR Attendance System",
-        `<p>Hi ${full_name},</p>
-         <p>Click below to choose a new password. This link expires in 30 minutes and can only be used once.</p>
-         <p><a href="${resetUrl}">${resetUrl}</a></p>
-         <p>If you didn't request this, you can safely ignore this email — your password won't be changed.</p>`
-      );
-    }
-    // Same response whether or not the account exists, or whether email is
-    // even configured - the response itself must never reveal that.
-    res.json(genericResponse);
-  } catch (err: any) {
-    console.error(err);
-    // Still return the generic message - don't let an internal error leak
-    // account-existence info via a different response shape either.
-    res.json(genericResponse);
-  }
+app.post("/api/auth/forgot-password/request", authLimiter, async (_req, res) => {
+  return res.status(403).json({
+    error: "Self-service password reset is disabled. Contact your administrator for a new temporary password.",
+  });
 });
 // Forgot password - step 2: consume the emailed token and set a new password.
 // The token is the proof of inbox ownership; knowing the email address alone
 // is no longer sufficient to reset someone else's account.
-app.post("/api/auth/forgot-password/reset", authLimiter, async (req, res) => {
-  const { token, newPassword, confirmPassword } = req.body;
-  if (!token || !newPassword || !confirmPassword) {
-    return res.status(400).json({ error: "Reset link, new password, and confirm password are required." });
-  }
-  if (newPassword.length < 8) {
-    return res.status(400).json({ error: "Password must be at least 8 characters long." });
-  }
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({ error: "New password and confirm password do not match." });
-  }
-
-  try {
-    const userId = await consumeAuthToken(token, "password_reset");
-    if (!userId) {
-      return res.status(400).json({ error: "This reset link is invalid or has expired. Please request a new one." });
-    }
-
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query("UPDATE users SET password_hash = $1, email_verified = true WHERE id = $2", [passwordHash, userId]);
-    // Invalidate any other outstanding reset tokens for this account.
-    await pool.query("UPDATE auth_tokens SET used = true WHERE user_id = $1 AND purpose = 'password_reset'", [userId]);
-
-    res.json({ success: true, message: "Password reset successfully. You can now log in with your new password." });
-  } catch (err: any) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to reset password." });
-  }
+app.post("/api/auth/forgot-password/reset", authLimiter, async (_req, res) => {
+  return res.status(403).json({
+    error: "Self-service password reset is disabled. Contact your administrator for a new temporary password.",
+  });
 });
 
 
@@ -879,7 +907,7 @@ app.post("/api/admin/regenerate/:userId", requireAuth, requireAdmin, async (req,
 // // // GROUP MANAGEMENT ENDPOINTS (require login)
 // 
 // List groups owned by the logged-in coordinator
-app.get("/api/groups", requireAuth, async (req, res) => {
+app.get("/api/groups", requireAuth, requireCoordinator, async (req, res) => {
   const user = (req as any).user as AuthPayload;
   try {
     const result = await pool.query(
@@ -895,7 +923,7 @@ app.get("/api/groups", requireAuth, async (req, res) => {
 });
 
 // Create a new group
-app.post("/api/groups", requireAuth, async (req, res) => {
+app.post("/api/groups", requireAuth, requireCoordinator, async (req, res) => {
   const user = (req as any).user as AuthPayload;
   const { name, description } = req.body;
   if (!name || !String(name).trim()) {
@@ -932,7 +960,7 @@ app.post("/api/groups", requireAuth, async (req, res) => {
 // Delete a group and everything under it (participants, sessions, checkins,
 // reports) via the schema's ON DELETE CASCADE foreign keys. Irreversible -
 // the frontend is expected to confirm with the user before calling this.
-app.delete("/api/groups/:groupId", requireAuth, async (req, res) => {
+app.delete("/api/groups/:groupId", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   try {
@@ -969,7 +997,7 @@ app.delete("/api/groups/:groupId", requireAuth, async (req, res) => {
 });
 
 // Get a single group + its participants
-app.get("/api/groups/:groupId/details", requireAuth, async (req, res) => {
+app.get("/api/groups/:groupId/details", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   try {
@@ -987,7 +1015,7 @@ app.get("/api/groups/:groupId/details", requireAuth, async (req, res) => {
 });
 
 // Update a group's schedules
-app.patch("/api/groups/:groupId/schedules", requireAuth, async (req, res) => {
+app.patch("/api/groups/:groupId/schedules", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   const { schedules } = req.body;
@@ -1005,7 +1033,7 @@ app.patch("/api/groups/:groupId/schedules", requireAuth, async (req, res) => {
 });
 
 // Register a participant into a group
-app.post("/api/groups/:groupId/participants", requireAuth, async (req, res) => {
+app.post("/api/groups/:groupId/participants", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   const { studentId, name, email } = req.body;
@@ -1042,7 +1070,7 @@ app.post("/api/groups/:groupId/participants", requireAuth, async (req, res) => {
 });
 
 // Remove a participant
-app.delete("/api/groups/:groupId/participants/:participantId", requireAuth, async (req, res) => {
+app.delete("/api/groups/:groupId/participants/:participantId", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId, participantId } = req.params;
   const user = (req as any).user as AuthPayload;
   try {
@@ -1058,7 +1086,7 @@ app.delete("/api/groups/:groupId/participants/:participantId", requireAuth, asyn
 // Bulk-register participants from a JSON array (CSV is parsed on the client).
 // Body: { participants: [{ studentId, name, email? }, ...] }
 // Caps at 500 rows per request. Skips duplicates (existing or within the batch).
-app.post("/api/groups/:groupId/participants/bulk", requireAuth, async (req, res) => {
+app.post("/api/groups/:groupId/participants/bulk", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   const rows = req.body?.participants;
@@ -1644,7 +1672,7 @@ setInterval(purgeOldPhotos, 30 * 60 * 1000);
 // // PUBLIC / ATTENDANCE API ENDPOINTS
 // 
 // 1. Trigger Scheduler manually
-app.post("/api/scheduler/trigger", requireAuth, async (req, res) => {
+app.post("/api/scheduler/trigger", requireAuth, requireCoordinator, async (req, res) => {
   const user = (req as any).user as AuthPayload;
   try {
     const fullLog = await runSchedulerLogic();
@@ -1665,7 +1693,7 @@ app.post("/api/scheduler/trigger", requireAuth, async (req, res) => {
 });
 
 // 2. Force start an attendance session immediately for a group (manual override)
-app.post("/api/sessions/force-start", requireAuth, async (req, res) => {
+app.post("/api/sessions/force-start", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId, durationMinutes } = req.body;
   const user = (req as any).user as AuthPayload;
   if (!groupId) {
@@ -1732,7 +1760,7 @@ app.post("/api/sessions/force-start", requireAuth, async (req, res) => {
 });
 
 // 3. Force close a session immediately
-app.post("/api/sessions/force-close", requireAuth, async (req, res) => {
+app.post("/api/sessions/force-close", requireAuth, requireCoordinator, async (req, res) => {
   const { sessionId } = req.body;
   const user = (req as any).user as AuthPayload;
   if (!sessionId) {
@@ -1890,7 +1918,7 @@ app.post("/api/checkin", checkinLimiterByIp, checkinLimiterByStudent, async (req
 });
 
 // 6. Get QR Code data URL and absolute check-in link for a group
-app.get("/api/groups/:groupId/qrcode", requireAuth, async (req, res) => {
+app.get("/api/groups/:groupId/qrcode", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
 
@@ -1921,7 +1949,7 @@ app.get("/api/groups/:groupId/qrcode", requireAuth, async (req, res) => {
 // Pass ?photos=1 to include photo URLs for historical check-ins.
 // Live active-session photos are always included when a session is open.
 // Photos are served from disk via GET /api/groups/:groupId/photos/... (not embedded as base64).
-app.get("/api/reports/:groupId", requireAuth, async (req, res) => {
+app.get("/api/reports/:groupId", requireAuth, requireCoordinator, async (req, res) => {
   const { groupId } = req.params;
   const user = (req as any).user as AuthPayload;
   const includeHistoricalPhotos = req.query.photos === "1";
@@ -2085,6 +2113,7 @@ app.get("/api/reports/:groupId", requireAuth, async (req, res) => {
 app.get(
   "/api/groups/:groupId/photos/:sessionId/:studentId",
   requireAuth,
+  requireCoordinator,
   async (req, res) => {
     const { groupId, sessionId, studentId } = req.params;
     const user = (req as any).user as AuthPayload;
