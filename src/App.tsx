@@ -10,7 +10,7 @@ import {
 import { useAuth } from "./lib/auth";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  Plus, FolderHeart, Sparkles, RefreshCw,
+  Plus, FolderHeart, Sparkles,
 } from "lucide-react";
 import AuthPanel from "./components/AuthPanel";
 import CheckInPage from "./components/CheckInPage";
@@ -19,13 +19,13 @@ import ReportsPanel from "./components/ReportsPanel";
 import AboutPage from "./components/AboutPage";
 import AdminPanel from "./components/AdminPanel";
 import ChangePasswordPanel from "./components/ChangePasswordPanel";
+import { Alert, Button, EmptyState, Input, Spinner } from "./components/ui";
 import { Group } from "./types";
 
 function AuthLoadingScreen() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
-      <RefreshCw className="h-10 w-10 text-navy animate-spin mb-4" />
-      <p className="text-sm text-slate-500 font-sans">Connecting to system gateway...</p>
+      <Spinner label="Connecting to system gateway…" size="lg" />
     </div>
   );
 }
@@ -196,19 +196,17 @@ function DashboardPage() {
                 Rosters, schedules, QR codes, and attendance logs.
               </p>
             </div>
-            <button
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 bg-navy hover:bg-navy/90 text-white font-semibold py-2 px-3.5 rounded-xl text-xs transition-colors shadow-sm shadow-navy/10 cursor-pointer"
             >
-              <Plus className="h-3.5 w-3.5" /> New Group
-            </button>
+              <Plus className="h-3.5 w-3.5" aria-hidden /> New Group
+            </Button>
           </div>
 
           {groupsLoading ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <RefreshCw className="h-7 w-7 text-navy animate-spin mb-3" />
-              <p className="text-xs text-slate-500">Loading groups...</p>
-            </div>
+            <Spinner label="Loading groups…" />
           ) : groups.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {groups.map((grp) => (
@@ -272,21 +270,16 @@ function DashboardPage() {
               ))}
             </div>
           ) : (
-            <div className="text-center py-16 max-w-sm mx-auto">
-              <div className="mx-auto w-12 h-12 bg-navy/8 border border-navy/10 rounded-2xl flex items-center justify-center mb-4">
-                <FolderHeart className="h-6 w-6 text-navy" />
-              </div>
-              <h3 className="text-sm font-bold text-slate-900 font-sans">No groups yet</h3>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Create a group to register participants and schedule QR check-ins.
-              </p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center justify-center gap-1 px-3.5 py-2 bg-navy hover:bg-navy/90 text-white font-semibold rounded-xl text-xs mt-4 cursor-pointer shadow-sm shadow-navy/10"
-              >
-                <Plus className="h-3.5 w-3.5" /> Create group
-              </button>
-            </div>
+            <EmptyState
+              title="No groups yet"
+              description="Create a group to register participants and schedule QR check-ins."
+              icon={<FolderHeart className="h-6 w-6 text-navy" aria-hidden />}
+              action={
+                <Button variant="primary" size="sm" onClick={() => setShowCreateModal(true)}>
+                  <Plus className="h-3.5 w-3.5" aria-hidden /> Create group
+                </Button>
+              }
+            />
           )}
         </motion.main>
       </AnimatePresence>
@@ -309,23 +302,18 @@ function DashboardPage() {
                 Groups represent classes or events. Add schedules and participants after creating.
               </p>
 
-              <form onSubmit={handleCreateGroup} className="space-y-3.5">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                    Group title
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Algorithms 301"
-                    value={newGroupName}
-                    onChange={(e) => setNewGroupName(e.target.value)}
-                    className="block w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-navy focus:border-navy text-slate-800"
-                  />
-                </div>
+              <form onSubmit={handleCreateGroup} className="space-y-3.5" noValidate>
+                <Input
+                  label="Group title"
+                  type="text"
+                  required
+                  placeholder="e.g. Algorithms 301"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                />
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
                     Description
                   </label>
                   <textarea
@@ -333,31 +321,33 @@ function DashboardPage() {
                     placeholder="Optional class details..."
                     value={newGroupDesc}
                     onChange={(e) => setNewGroupDesc(e.target.value)}
-                    className="block w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-navy focus:border-navy text-slate-800 resize-none"
+                    className="block w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:border-navy text-slate-800 resize-none"
                   />
                 </div>
 
                 {createError && (
-                  <div className="p-2.5 bg-navy/8 border border-navy/15 text-navy text-xs rounded-xl font-medium">
+                  <Alert variant="error" onDismiss={() => setCreateError(null)}>
                     {createError}
-                  </div>
+                  </Alert>
                 )}
 
                 <div className="flex gap-2 pt-2">
-                  <button
+                  <Button
                     type="button"
+                    variant="secondary"
+                    className="flex-1"
                     onClick={() => setShowCreateModal(false)}
-                    className="flex-1 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-2 rounded-xl text-xs transition-colors cursor-pointer"
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="submit"
-                    disabled={createLoading}
-                    className="flex-1 bg-navy hover:bg-navy/90 disabled:opacity-50 text-white font-bold py-2 rounded-xl text-xs transition-colors cursor-pointer"
+                    variant="primary"
+                    className="flex-1"
+                    loading={createLoading}
                   >
-                    {createLoading ? "Creating..." : "Create"}
-                  </button>
+                    {createLoading ? "Creating…" : "Create"}
+                  </Button>
                 </div>
               </form>
             </motion.div>
