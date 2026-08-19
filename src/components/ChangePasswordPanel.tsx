@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../lib/auth";
-import { AlertCircle, KeyRound } from "lucide-react";
+import { KeyRound } from "lucide-react";
+import { Alert, Button, Input } from "./ui";
 
 /**
  * Shown when the user must replace an admin-issued temporary password.
@@ -50,70 +51,64 @@ export default function ChangePasswordPanel() {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 p-6">
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-5">
           <div className="h-10 w-10 rounded-xl bg-navy/10 flex items-center justify-center">
-            <KeyRound className="h-5 w-5 text-navy" />
+            <KeyRound className="h-5 w-5 text-navy" aria-hidden />
           </div>
           <div>
             <h1 className="text-lg font-bold text-slate-800">Set a new password</h1>
-            <p className="text-xs text-slate-500">Your admin gave you a temporary password. You must change it before continuing.</p>
+            <p className="text-xs text-slate-500">
+              Your admin gave you a temporary password. You must change it before continuing.
+            </p>
           </div>
         </div>
 
         {error && (
-          <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-3 text-sm text-red-700 flex gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <Alert variant="error" className="mb-4" onDismiss={() => setError(null)}>
             {error}
-          </div>
+          </Alert>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Current (temporary) password</label>
-            <input
-              type="password"
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-navy focus:outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">New password</label>
-            <input
-              type="password"
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-navy focus:outline-none"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Confirm new password</label>
-            <input
-              type="password"
-              required
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:ring-2 focus:ring-navy focus:outline-none"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-navy hover:bg-navy/90 disabled:bg-slate-400 text-white font-semibold py-3 rounded-xl text-sm"
-          >
-            {loading ? "Saving..." : "Save new password"}
-          </button>
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <Input
+            label="Current (temporary) password"
+            type="password"
+            required
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+          />
+          <Input
+            label="New password"
+            type="password"
+            required
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            hint="At least 8 characters"
+          />
+          <Input
+            label="Confirm new password"
+            type="password"
+            required
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+          />
+          <Button type="submit" variant="primary" size="lg" fullWidth loading={loading}>
+            {loading ? "Saving…" : "Save new password"}
+          </Button>
         </form>
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          fullWidth
+          className="mt-4 text-slate-500"
           onClick={() => logout()}
-          className="mt-4 w-full text-sm text-slate-500 hover:text-slate-800"
         >
           Sign out
-        </button>
+        </Button>
       </div>
     </div>
   );
