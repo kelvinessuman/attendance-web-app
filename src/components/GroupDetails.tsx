@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { 
-  Calendar, Clock, UserPlus, Trash2, QrCode, Copy, Printer, Play, Square, RefreshCw, ChevronLeft, Eye, HelpCircle, Upload, FileSpreadsheet 
+  Calendar, Clock, UserPlus, Trash2, QrCode, Copy, Printer, Play, Square, RefreshCw, ChevronLeft, Eye, HelpCircle, Upload, FileSpreadsheet, Users 
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { Group, Schedule, Participant } from "../types";
+import { Alert, Button, EmptyState, Spinner } from "./ui";
 
 interface GroupDetailsProps {
   groupId: string;
@@ -45,6 +46,8 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
+  /** Mobile-only section focus: keeps dense controls from stacking endlessly on small screens. */
+  const [mobileTab, setMobileTab] = useState<"roster" | "schedule" | "session">("roster");
 
   // Each endpoint is independent — update state as each response arrives so
   // the QR and session banner are not blocked by a slow participant list.
@@ -564,82 +567,110 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
   if (!detailsLoading && !group && errorMsg) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 text-left">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-navy transition-colors cursor-pointer mb-4"
-        >
-          <ChevronLeft className="h-4 w-4" /> Back to Dashboard
-        </button>
-        <div className="p-4 bg-navy/8 border border-navy/15 text-sm text-navy rounded-2xl">
-          {errorMsg}
-        </div>
+        <Button variant="ghost" size="sm" onClick={onBack} className="mb-4 -ml-2">
+          <ChevronLeft className="h-4 w-4" aria-hidden /> Back to Dashboard
+        </Button>
+        <Alert variant="error">{errorMsg}</Alert>
       </div>
     );
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 text-left">
+    <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6 text-left">
       {/* Navigation and Title Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5 mb-8">
-        <div>
-          <button
-            onClick={onBack}
-            className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-navy transition-colors cursor-pointer mb-2"
-          >
-            <ChevronLeft className="h-4 w-4" /> Back to Dashboard
-          </button>
-          {detailsLoading && !group ? (
-            <div className="space-y-2 animate-pulse">
-              <div className="h-7 w-48 bg-slate-200 rounded-lg" />
-              <div className="h-4 w-72 bg-slate-100 rounded-lg" />
-            </div>
-          ) : (
-            <>
-              <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
-                {group?.name}
-              </h1>
-              <p className="text-sm text-slate-500 font-sans max-w-2xl mt-1">
-                {group?.description || "No description provided for this group."}
-              </p>
-            </>
-          )}
+      <div className="flex flex-col gap-4 border-b border-slate-100 pb-4 sm:pb-5 mb-5 sm:mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="min-w-0">
+            <button
+              onClick={onBack}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-navy transition-colors cursor-pointer mb-2"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden /> Back to Dashboard
+            </button>
+            {detailsLoading && !group ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-7 w-48 bg-slate-200 rounded-lg" />
+                <div className="h-4 w-72 max-w-full bg-slate-100 rounded-lg" />
+              </div>
+            ) : (
+              <>
+                <h1 className="ui-title text-xl sm:text-2xl truncate">
+                  {group?.name}
+                </h1>
+                <p className="ui-subtitle mt-1 max-w-2xl">
+                  {group?.description || "No description provided for this group."}
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={onViewReports}
+              disabled={!group}
+              className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-navy/8 hover:bg-navy/12 text-navy font-semibold rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <Eye className="h-4 w-4" aria-hidden />
+              <span className="hidden xs:inline sm:inline">Reports</span>
+              <span className="sm:hidden">Reports</span>
+            </button>
+            <button
+              onClick={fetchData}
+              className="p-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-slate-600 cursor-pointer transition-colors"
+              title="Refresh Group Info"
+              aria-label="Refresh group"
+            >
+              <RefreshCw className={`h-4 w-4 ${detailsLoading || qrLoading || sessionLoading ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              disabled={!group}
+              className="p-2 border border-red-200 hover:bg-red-50 rounded-xl text-red-500 cursor-pointer transition-colors disabled:opacity-50"
+              title="Delete Group"
+              aria-label="Delete group"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        {/* Mobile section tabs — hide on large screens where the full grid is usable */}
+        <div className="ui-tabs lg:hidden" role="tablist" aria-label="Group sections">
           <button
-            onClick={onViewReports}
-            disabled={!group}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-navy/8 hover:bg-navy/12 text-navy font-semibold rounded-xl text-xs transition-colors cursor-pointer disabled:opacity-50"
+            type="button"
+            role="tab"
+            className="ui-tab"
+            aria-selected={mobileTab === "roster"}
+            onClick={() => setMobileTab("roster")}
           >
-            <Eye className="h-4 w-4" /> View Attendance & Reports
+            Roster
+            {!detailsLoading && group ? ` (${participants.length})` : ""}
           </button>
-          
           <button
-            onClick={fetchData}
-            className="p-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-slate-600 cursor-pointer transition-colors"
-            title="Refresh Group Info"
+            type="button"
+            role="tab"
+            className="ui-tab"
+            aria-selected={mobileTab === "schedule"}
+            onClick={() => setMobileTab("schedule")}
           >
-            <RefreshCw className={`h-4 w-4 ${detailsLoading || qrLoading || sessionLoading ? "animate-spin" : ""}`} />
+            Schedule
           </button>
-
           <button
-            onClick={() => setConfirmingDelete(true)}
-            disabled={!group}
-            className="p-2 border border-red-200 hover:bg-red-50 rounded-xl text-red-500 cursor-pointer transition-colors disabled:opacity-50"
-            title="Delete Group"
+            type="button"
+            role="tab"
+            className="ui-tab"
+            aria-selected={mobileTab === "session"}
+            onClick={() => setMobileTab("session")}
           >
-            <Trash2 className="h-4 w-4" />
+            QR & Session
           </button>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="mb-6 p-4 bg-navy/8 border border-navy/15 text-sm text-navy rounded-2xl flex items-start gap-3">
-          <svg className="h-5 w-5 text-navy/80 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <span>{errorMsg}</span>
-        </div>
+        <Alert variant="error" className="mb-6" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </Alert>
       )}
 
       {/* Active Session Warning Banner */}
@@ -671,20 +702,24 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
         </motion.div>
       )}
 
-      {/* Grid Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Grid Content — on mobile, tabs show one column at a time */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 sm:gap-6 lg:gap-8">
         
         {/* Left Columns - Configuration */}
-        <div className="lg:col-span-2 space-y-8">
+        <div className="lg:col-span-2 space-y-5 sm:space-y-6 lg:space-y-8">
           
           {/* Schedules Section */}
-          <div className="bg-white border border-slate-100 rounded-3xl p-5 sm:p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4 font-sans">
-              <Calendar className="h-5 w-5 text-navy" />
-              Configure Schedule Slots
+          <div
+            className={`ui-panel ${mobileTab !== "schedule" ? "hidden lg:block" : ""}`}
+            role="tabpanel"
+            hidden={false}
+          >
+            <h2 className="ui-title text-base sm:text-lg flex items-center gap-2 mb-2">
+              <Calendar className="h-5 w-5 text-navy shrink-0" aria-hidden />
+              Schedule slots
             </h2>
-            <p className="text-xs text-slate-400 mb-5 max-w-lg leading-relaxed">
-              Define recurring times when sessions should run. Overnight slots (end time earlier than start) are allowed and roll into the next day.
+            <p className="ui-meta mb-4 max-w-lg">
+              Recurring times when sessions should run. Overnight slots (end before start) roll into the next day.
             </p>
 
             {/* Existing Schedules list */}
@@ -728,7 +763,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
             {/* Add Schedule Form */}
             <form onSubmit={handleAddSchedule} className={`grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-100 p-4 rounded-2xl ${!group ? "opacity-50 pointer-events-none" : ""}`}>
               <div className="sm:col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Day of Week</label>
+                <label className="ui-label block mb-1.5">Day of Week</label>
                 <select
                   value={schedDay}
                   onChange={(e) => setSchedDay(e.target.value)}
@@ -741,7 +776,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start Time</label>
+                <label className="ui-label block mb-1.5">Start Time</label>
                 <input
                   type="time"
                   value={schedStart}
@@ -752,7 +787,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
 
               <div className="flex items-end">
                 <div className="w-full">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">End Time</label>
+                  <label className="ui-label block mb-1.5">End Time</label>
                   <input
                     type="time"
                     value={schedEnd}
@@ -774,19 +809,21 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
           </div>
 
           {/* Participants Registration Panel */}
-          <div className="bg-white border border-slate-100 rounded-3xl p-5 sm:p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-4 font-sans">
-              <UserPlus className="h-5 w-5 text-navy" />
-              Register Participants {detailsLoading && !group ? "" : `(${participants.length})`}
+          <div
+            className={`ui-panel ${mobileTab !== "roster" ? "hidden lg:block" : ""}`}
+          >
+            <h2 className="ui-title text-base sm:text-lg flex items-center gap-2 mb-2">
+              <UserPlus className="h-5 w-5 text-navy shrink-0" aria-hidden />
+              Roster {detailsLoading && !group ? "" : `(${participants.length})`}
             </h2>
-            <p className="text-xs text-slate-400 mb-5 max-w-lg leading-relaxed">
-              Register students or members who are allowed to check in to this group. Anyone scanning the QR code must have their ID pre-registered here.
+            <p className="ui-meta mb-4 max-w-lg">
+              Only registered IDs can check in via the group QR code.
             </p>
 
             {/* Registration Form */}
             <form onSubmit={handleAddParticipant} className={`grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 bg-slate-50 border border-slate-100 p-4 rounded-2xl ${!group ? "opacity-50 pointer-events-none" : ""}`}>
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Student / Participant ID</label>
+                <label className="ui-label block mb-1.5">Student / Participant ID</label>
                 <input
                   type="text"
                   required
@@ -798,7 +835,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Full Name</label>
+                <label className="ui-label block mb-1.5">Full Name</label>
                 <input
                   type="text"
                   required
@@ -810,7 +847,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Email (Optional)</label>
+                <label className="ui-label block mb-1.5">Email (Optional)</label>
                 <input
                   type="email"
                   placeholder="john@example.com"
@@ -876,7 +913,7 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
                   <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-100 bg-white">
                     <table className="min-w-full text-[11px]">
                       <thead className="bg-slate-50 sticky top-0">
-                        <tr className="text-[10px] text-slate-400 uppercase font-bold tracking-wider text-left">
+                        <tr className="ui-label text-left">
                           <th className="px-3 py-1.5">ID</th>
                           <th className="px-3 py-1.5">Name</th>
                           <th className="px-3 py-1.5">Email</th>
@@ -947,15 +984,18 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
                       : participants;
                     if (filtered.length === 0) {
                       return (
-                        <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                          No participants match “{rosterSearch}”.
-                        </div>
+                        <EmptyState
+                          title={`No participants match “${rosterSearch}”`}
+                          description="Try a different name, ID, or email."
+                          icon={<Users className="h-6 w-6" aria-hidden />}
+                          className="border border-dashed border-slate-200 rounded-2xl py-8"
+                        />
                       );
                     }
                     return (
                       <table className="min-w-full divide-y divide-slate-100">
                         <thead>
-                          <tr className="text-[10px] text-slate-400 uppercase font-bold tracking-wider text-left bg-slate-50">
+                          <tr className="ui-label text-left bg-slate-50">
                             <th className="px-4 py-2.5 rounded-l-xl">ID</th>
                             <th className="px-4 py-2.5">Name</th>
                             <th className="px-4 py-2.5">Email</th>
@@ -990,27 +1030,32 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
                   )}
                 </>
               ) : (
-                <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                  No participants registered yet. Use the form above to add members.
-                </div>
+                <EmptyState
+                  title="No participants yet"
+                  description="Use the form above to add members to this group roster."
+                  icon={<Users className="h-6 w-6" aria-hidden />}
+                  className="border border-dashed border-slate-200 rounded-2xl py-8"
+                />
               )}
             </div>
           </div>
         </div>
 
         {/* Right Column - QR Code and Overrides */}
-        <div className="space-y-8">
+        <div
+          className={`space-y-5 sm:space-y-6 lg:space-y-8 ${mobileTab !== "session" ? "hidden lg:block" : ""}`}
+        >
           
           {/* QR Code Presentation */}
-          <div className="bg-white border border-slate-100 rounded-3xl p-5 sm:p-6 shadow-sm text-center relative overflow-hidden">
+          <div className="ui-panel text-center relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1.5 bg-navy" />
             
-            <h2 className="text-sm font-bold text-slate-900 flex items-center justify-center gap-1.5 mb-2 font-sans">
-              <QrCode className="h-5 w-5 text-navy" />
-              Permanent Group QR Code
+            <h2 className="ui-title text-base flex items-center justify-center gap-1.5 mb-2">
+              <QrCode className="h-5 w-5 text-navy" aria-hidden />
+              Group QR code
             </h2>
-            <p className="text-[11px] text-slate-400 mb-5 leading-relaxed">
-              This QR code remains permanent for this group. Students can scan it at any time to open the secure browser check-in page.
+            <p className="ui-meta mb-4 leading-relaxed">
+              Permanent for this group. Students scan it to open the check-in page.
             </p>
 
             {qrCodeData ? (
@@ -1063,13 +1108,13 @@ export default function GroupDetails({ groupId, onBack, onViewReports }: GroupDe
           </div>
 
           {/* Test and Override Utilities */}
-          <div className="bg-white border border-slate-100 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
-            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2 font-sans border-b border-slate-50 pb-2.5">
-              <HelpCircle className="h-4.5 w-4.5 text-slate-400" />
-              Testing & Override Tools
+          <div className="ui-panel space-y-4">
+            <h2 className="ui-title text-base flex items-center gap-2 border-b border-slate-100 pb-2.5">
+              <HelpCircle className="h-4 w-4 text-slate-400" aria-hidden />
+              Session tools
             </h2>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Use these shortcuts to bypass waiting on automatic calendar triggers. Perfect for grading and real-time live demonstrations.
+            <p className="ui-meta leading-relaxed">
+              Force-start or sync the scheduler when you need a session outside the automatic schedule.
             </p>
 
             <div className="space-y-2.5">
