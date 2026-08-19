@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { motion } from "motion/react";
 import ugLogo from "../assets/UG Logo.png";
-import { AlertCircle } from "lucide-react";
+import { Alert, Button, Input } from "./ui";
 
 /**
  * Login-only panel.
@@ -37,9 +37,15 @@ export default function AuthPanel() {
         className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden"
       >
         <div className="bg-navy px-6 py-5 flex items-center gap-3">
-          <img src={ugLogo} alt="Logo" className="h-10 w-10 object-contain" />
+          <img
+            src={ugLogo}
+            alt="University logo"
+            className="h-10 w-10 object-contain"
+          />
           <div>
-            <h1 className="text-white font-bold text-lg tracking-tight">QR Attendance System</h1>
+            <h1 className="text-white font-bold text-lg tracking-tight">
+              QR Attendance System
+            </h1>
             <p className="text-white/70 text-xs">Authorized users only</p>
           </div>
         </div>
@@ -51,47 +57,40 @@ export default function AuthPanel() {
           </p>
 
           {error && (
-            <div className="mb-4 rounded-xl bg-red-50 p-3 border border-red-200 flex items-start gap-2.5 text-xs text-red-700 font-medium">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </div>
+            <Alert variant="error" className="mb-4" onDismiss={() => setError(null)}>
+              {error}
+            </Alert>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-3.5">
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Email
-              </label>
-              <input
-                type="email"
-                required
-                value={loginEmail}
-                onChange={(e) => setLoginEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="block w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-navy focus:border-navy text-slate-800"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                required
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••"
-                className="block w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-navy focus:border-navy text-slate-800"
-              />
-            </div>
+          <form onSubmit={handleLogin} className="space-y-4" noValidate>
+            <Input
+              label="Email"
+              type="email"
+              required
+              autoComplete="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              placeholder="you@example.com"
+            />
+            <Input
+              label="Password"
+              type="password"
+              required
+              autoComplete="current-password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="••••••••"
+            />
 
-            <button
+            <Button
               type="submit"
-              disabled={loading}
-              className="w-full bg-navy hover:bg-navy/90 disabled:bg-slate-400 text-white font-semibold py-3 rounded-xl transition text-sm"
+              variant="primary"
+              size="lg"
+              fullWidth
+              loading={loading}
             >
-              {loading ? "Signing in..." : "Sign in"}
-            </button>
+              {loading ? "Signing in…" : "Sign in"}
+            </Button>
           </form>
         </div>
       </motion.div>
