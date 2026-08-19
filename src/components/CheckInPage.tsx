@@ -218,8 +218,14 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-6">
-        <RefreshCw className="h-10 w-10 text-gold animate-spin mb-4" />
-        <p className="text-sm text-slate-400 font-sans">Checking session status...</p>
+        <div className="flex flex-col items-center gap-3" role="status" aria-live="polite">
+          <span
+            className="h-10 w-10 border-[3px] border-gold/30 border-t-gold rounded-full animate-spin"
+            aria-hidden
+          />
+          <p className="text-sm text-slate-400 font-sans">Checking session status…</p>
+          <span className="sr-only">Checking session status</span>
+        </div>
       </div>
     );
   }
