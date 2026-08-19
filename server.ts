@@ -170,35 +170,53 @@ testDbConnection();
 
 const genId = () => crypto.randomUUID();
 
-// // CHECK-IN PHOTO STORAGE (filesystem, not DB)
-// // Photos live under uploads/checkins/<sessionId>/<studentId>.<ext>.
-// The DB only stores the relative path (photo_path). This keeps Postgres
-// lean, makes retention a simple unlink, and lets us serve images via a
-// protected route instead of stuffing base64 into every report payload.
-const UPLOADS_ROOT = path.join(process.cwd(), "uploads");
-const CHECKINS_UPLOAD_DIR = path.join(UPLOADS_ROOT, "checkins");
+// CHECK-IN PHOTO STORAGE (Supabase Storage — not server disk)
+// Photos are uploaded to a private Supabase Storage bucket.
+// The DB only stores the object path in checkins.photo_path
+// (e.g. "checkins/<sessionId>/<studentId>.jpg").
+// Serving uses short-lived signed URLs so the bucket stays private.
 
-async function ensureUploadDirs() {
-  await fsp.mkdir(CHECKINS_UPLOAD_DIR, { recursive: true });
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "checkin-photos";
+const SUPABASE_STORAGE_ENABLED = !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+
+if (!SUPABASE_STORAGE_ENABLED) {
+  console.warn(
+    "\n[Photos] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — check-in photos will fail to save.\n" +
+    "  Create a private Storage bucket named \"" + SUPABASE_STORAGE_BUCKET + "\" in Supabase and set both env vars.\n"
+  );
 }
 
-/** Map a data-URL mime to a safe file extension. */
+async function ensureUploadDirs() {
+  // No local disk storage. Kept as a no-op so startServer() does not change.
+}
+
 function extensionForMime(mime: string): string {
   if (mime === "image/png") return "png";
   if (mime === "image/webp") return "webp";
-  return "jpg"; // jpeg / jpg / default
+  return "jpg";
+}
+
+function storageObjectPath(sessionId: string, studentId: string, ext: string): string {
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeStudent = studentId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `checkins/${safeSession}/${safeStudent}.${ext}`;
 }
 
 /**
- * Decode a data:image/...;base64,... payload and write it under
- * uploads/checkins/<sessionId>/. Returns the relative path stored in the DB
- * (posix-style, e.g. "checkins/<sessionId>/<studentId>.jpg").
+ * Decode data:image/...;base64,... and upload to Supabase Storage.
+ * Returns the object path stored in checkins.photo_path.
  */
 async function saveCheckinPhoto(
   sessionId: string,
   studentId: string,
   photoDataUrl: string
 ): Promise<string> {
+  if (!SUPABASE_STORAGE_ENABLED) {
+    throw new Error("Photo storage is not configured on the server");
+  }
+
   const match = /^data:(image\/(jpeg|jpg|png|webp));base64,(.+)$/i.exec(photoDataUrl);
   if (!match) {
     throw new Error("Invalid photo data URL");
@@ -206,51 +224,102 @@ async function saveCheckinPhoto(
   const mime = match[1].toLowerCase().replace("image/jpg", "image/jpeg");
   const b64 = match[3];
   const buf = Buffer.from(b64, "base64");
-  // Soft size guard after decode (~750KB). Matches the pre-decode length check on the endpoint.
   if (buf.length > 750_000) {
     throw new Error("Photo is too large after decode");
   }
 
-  // sessionId / studentId come from our own IDs or uppercased student IDs — still
-  // sanitize so a malicious studentId cannot escape the uploads tree.
-  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const safeStudent = studentId.replace(/[^a-zA-Z0-9_-]/g, "_");
   const ext = extensionForMime(mime);
-  const dir = path.join(CHECKINS_UPLOAD_DIR, safeSession);
-  await fsp.mkdir(dir, { recursive: true });
-  const filename = `${safeStudent}.${ext}`;
-  const absPath = path.join(dir, filename);
-  await fsp.writeFile(absPath, buf);
-  // Relative path always uses forward slashes for portability in the DB.
-  return `checkins/${safeSession}/${filename}`;
+  const objectPath = storageObjectPath(sessionId, studentId, ext);
+  const uploadUrl =
+    `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_STORAGE_BUCKET)}/${objectPath}`;
+
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      "Content-Type": mime,
+      "x-upsert": "true",
+    },
+    body: buf,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[Photo] Supabase upload failed", res.status, body);
+    throw new Error("Could not store photo");
+  }
+
+  return objectPath;
 }
 
-/** Resolve a stored relative photo_path to an absolute path under UPLOADS_ROOT. Rejects traversal. */
-function resolvePhotoPath(relativePath: string): string | null {
-  if (!relativePath || relativePath.includes("..") || path.isAbsolute(relativePath)) {
+/** Create a short-lived signed URL for a stored object path. */
+async function createSignedPhotoUrl(objectPath: string, expiresInSeconds = 120): Promise<string | null> {
+  if (!SUPABASE_STORAGE_ENABLED || !objectPath || objectPath.includes("..")) {
     return null;
   }
-  const abs = path.resolve(UPLOADS_ROOT, relativePath);
-  if (!abs.startsWith(path.resolve(UPLOADS_ROOT) + path.sep) && abs !== path.resolve(UPLOADS_ROOT)) {
+
+  const signUrl =
+    `${SUPABASE_URL}/storage/v1/object/sign/${encodeURIComponent(SUPABASE_STORAGE_BUCKET)}/${objectPath}`;
+
+  const res = await fetch(signUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expiresIn: expiresInSeconds }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[Photo] sign failed", res.status, body);
     return null;
   }
-  return abs;
+
+  const data = (await res.json()) as { signedURL?: string; signedUrl?: string };
+  const signed = data.signedURL || data.signedUrl;
+  if (!signed) return null;
+  // signed path is relative to /storage/v1
+  if (signed.startsWith("http")) return signed;
+  return `${SUPABASE_URL}/storage/v1${signed.startsWith("/") ? signed : `/${signed}`}`;
 }
 
-async function deletePhotoFile(relativePath: string | null | undefined): Promise<void> {
-  if (!relativePath) return;
-  const abs = resolvePhotoPath(relativePath);
-  if (!abs) return;
+async function deletePhotoFile(objectPath: string | null | undefined): Promise<void> {
+  if (!objectPath || !SUPABASE_STORAGE_ENABLED) return;
+  if (objectPath.includes("..")) return;
+
   try {
-    await fsp.unlink(abs);
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") {
-      console.error("[Photo] Failed to delete", relativePath, err);
+    // Supabase Storage: DELETE object by full path under the bucket
+    const res = await fetch(
+      `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_STORAGE_BUCKET)}/${objectPath}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+        },
+      }
+    );
+    if (!res.ok && res.status !== 404) {
+      // Fallback: remove API with array of paths
+      await fetch(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_STORAGE_BUCKET)}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify([objectPath]),
+      });
     }
+  } catch (err) {
+    console.error("[Photo] Failed to delete", objectPath, err);
   }
 }
 
-/** Build the authenticated URL a coordinator uses to view a check-in photo. */
+/** Authenticated same-origin URL used by the frontend <img> tags. */
 function photoUrlFor(groupId: string, sessionId: string, studentId: string): string {
   return `/api/groups/${encodeURIComponent(groupId)}/photos/${encodeURIComponent(sessionId)}/${encodeURIComponent(studentId)}`;
 }
@@ -1537,8 +1606,8 @@ if (!DISABLE_INTERNAL_SCHEDULER) {
 
 // // PHOTO RETENTION
 // // Check-in photos are only needed briefly, to let a coordinator visually spot-
-// check a live/recent session. Files live on disk; the DB only holds photo_path.
-// After PHOTO_RETENTION_HOURS we unlink the file and null the path. Attendance
+// check a live/recent session. Files live in Supabase Storage; the DB only holds photo_path.
+// After PHOTO_RETENTION_HOURS we delete the Storage object and null the path. Attendance
 // status/timestamp/name are untouched — reports still work, they just stop
 // showing a photo for older check-ins.
 const PHOTO_RETENTION_HOURS = 24;
@@ -2011,7 +2080,8 @@ app.get("/api/reports/:groupId", requireAuth, async (req, res) => {
   }
 });
 
-// 8. Serve a check-in photo from disk (owner only). Same-origin <img> tags send the auth cookie.
+// 8. Serve a check-in photo via Supabase signed URL (owner only).
+// Same-origin <img> tags hit this route with the auth cookie; we redirect to a short-lived signed URL.
 app.get(
   "/api/groups/:groupId/photos/:sessionId/:studentId",
   requireAuth,
@@ -2025,24 +2095,20 @@ app.get(
       const normalizedStudentId = String(studentId).trim().toUpperCase();
       const result = await pool.query(
         `SELECT photo_path FROM checkins
-         WHERE group_id = $1 AND session_id = $2 AND student_id = $3`,
+         WHERE group_id = $1 AND session_id = $2 AND UPPER(student_id) = $3`,
         [groupId, sessionId, normalizedStudentId]
       );
       if (result.rows.length === 0 || !result.rows[0].photo_path) {
         return res.status(404).json({ error: "Photo not found or has expired." });
       }
 
-      const abs = resolvePhotoPath(result.rows[0].photo_path);
-      if (!abs || !fs.existsSync(abs)) {
+      const signed = await createSignedPhotoUrl(result.rows[0].photo_path, 300);
+      if (!signed) {
         return res.status(404).json({ error: "Photo file missing." });
       }
 
-      const ext = path.extname(abs).toLowerCase();
-      const contentType =
-        ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Cache-Control", "private, max-age=300");
-      fs.createReadStream(abs).pipe(res);
+      res.setHeader("Cache-Control", "private, max-age=60");
+      return res.redirect(302, signed);
     } catch (err: any) {
       console.error("[photo serve]", err);
       res.status(500).json({ error: "Failed to load photo." });
@@ -2105,7 +2171,7 @@ async function applyMigrations() {
 
 async function startServer() {
   await ensureUploadDirs();
-  console.log(`[Photos] Storing check-in images under ${CHECKINS_UPLOAD_DIR}`);
+  console.log(`[Photos] Storing check-in images in Supabase bucket "${SUPABASE_STORAGE_BUCKET}"`);
   console.log(`[Timezone] Schedules use APP_TIMEZONE=${APP_TIMEZONE}`);
 
   try {
