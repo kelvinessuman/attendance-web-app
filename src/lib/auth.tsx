@@ -10,9 +10,11 @@ export interface AuthUser {
 interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  mustChangePassword: boolean;
+  login: (email: string, password: string) => Promise<{ mustChangePassword: boolean }>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  clearMustChangePassword: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -28,6 +30,7 @@ async function parseJsonOrThrow(res: Response) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
   const refresh = async () => {
     try {
@@ -35,11 +38,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
+        setMustChangePassword(!!data.mustChangePassword);
       } else {
         setUser(null);
+        setMustChangePassword(false);
       }
     } catch {
       setUser(null);
+      setMustChangePassword(false);
     } finally {
       setLoading(false);
     }
@@ -58,15 +64,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     const data = await parseJsonOrThrow(res);
     setUser(data.user);
+    const must = !!data.mustChangePassword;
+    setMustChangePassword(must);
+    return { mustChangePassword: must };
   };
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     setUser(null);
+    setMustChangePassword(false);
   };
 
+  const clearMustChangePassword = () => setMustChangePassword(false);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>
+    <AuthContext.Provider
+      value={{ user, loading, mustChangePassword, login, logout, refresh, clearMustChangePassword }}
+    >
       {children}
     </AuthContext.Provider>
   );
