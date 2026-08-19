@@ -4,3 +4,56 @@
   --color-navy: #153D70;
   --color-gold: #BA8F4A;
 }
+
+/* Base accessibility & polish */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  color: #0f172a; /* slate-900 */
+  background-color: #f8fafc; /* slate-50 */
+}
+
+/* Keyboard focus: visible ring only when navigating by keyboard */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid #153d70;
+  outline-offset: 2px;
+}
+
+/* Screen-reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Calmer motion for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Improve default table readability */
+table {
+  border-collapse: collapse;
+}
