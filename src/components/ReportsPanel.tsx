@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { DailyReport, CumulativeReport } from "../types";
 import { motion, AnimatePresence } from "motion/react";
+import { Alert, Button, EmptyState, Spinner } from "./ui";
 
 interface ReportsPanelProps {
   groupId: string;
@@ -126,21 +127,20 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
           </p>
         </div>
 
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={fetchReports}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer self-start md:self-auto"
+          className="self-start md:self-auto"
         >
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh Reports
-        </button>
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Refresh Reports
+        </Button>
       </div>
 
       {errorMsg && (
-        <div className="mb-6 p-4 bg-navy/8 border border-navy/15 text-sm text-navy rounded-2xl flex items-start gap-3">
-          <svg className="h-5 w-5 text-navy/80 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <span>{errorMsg}</span>
-        </div>
+        <Alert variant="error" className="mb-6" onDismiss={() => setErrorMsg(null)}>
+          {errorMsg}
+        </Alert>
       )}
 
       {/* Tabs Switcher */}
@@ -174,10 +174,7 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
       </div>
 
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <RefreshCw className="h-10 w-10 text-navy animate-spin mb-4" />
-          <p className="text-sm text-slate-500">Compiling report analytics...</p>
-        </div>
+        <Spinner label="Compiling report analytics…" size="lg" />
       ) : (
         <AnimatePresence mode="wait">
           
@@ -232,9 +229,12 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                     </button>
                   ))
                 ) : (
-                  <div className="p-8 bg-white border border-dashed border-slate-200 text-center text-xs text-slate-400 rounded-3xl">
-                    No session reports generated yet. Expired active sessions or forced sessions populate reports automatically.
-                  </div>
+                  <EmptyState
+                    title="No session reports yet"
+                    description="Expired or forced sessions populate reports automatically."
+                    icon={<FileText className="h-6 w-6" aria-hidden />}
+                    className="bg-white border border-dashed border-slate-200 rounded-3xl"
+                  />
                 )}
               </div>
 
@@ -475,10 +475,12 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
 
                 </div>
               ) : (
-                <div className="p-12 bg-white border border-dashed border-slate-200 rounded-3xl text-center text-xs text-slate-400">
-                  <Award className="h-10 w-10 text-slate-300 mx-auto mb-3" />
-                  No cumulative statistics compiled yet. Complete at least one active attendance session to display group metrics.
-                </div>
+                <EmptyState
+                  title="No cumulative statistics yet"
+                  description="Complete at least one active attendance session to display group metrics."
+                  icon={<Award className="h-6 w-6" aria-hidden />}
+                  className="bg-white border border-dashed border-slate-200 rounded-3xl"
+                />
               )}
             </motion.div>
           )}
