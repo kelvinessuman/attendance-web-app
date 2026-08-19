@@ -1,0 +1,6 @@
+{
+  "name": "QR Attendance System",
+  "description": "Automated browser-camera QR code attendance management system with Firebase authentication and automatic schedule triggers.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
