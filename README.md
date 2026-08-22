@@ -2,6 +2,8 @@
 
 University attendance system: coordinators run groups, schedules, and QR check-ins; students check in with a photo; admins only authorize accounts (no operational data access).
 
+Copyright (c) 2026 [University of Ghana]. All rights reserved.
+
 **Stack:** Express + React (Vite), PostgreSQL (Supabase), JWT httpOnly cookies, Supabase Storage for check-in photos.
 
 ---
