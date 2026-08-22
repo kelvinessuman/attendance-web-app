@@ -405,63 +405,15 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
                   <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                     Live verification photo
                   </label>
-                  
-                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-[4/3] border border-slate-800 flex flex-col items-center justify-center">
-                    <canvas ref={canvasRef} className="hidden" />
 
-                    {/* Keep <video> mounted whenever we are not in cameraError so Retake
-                        does not destroy the element and lose the live stream. */}
-                    {!cameraError && (
-                      <div
-                        className={`relative w-full h-full ${photo ? "invisible absolute inset-0 pointer-events-none" : ""}`}
-                        aria-hidden={!!photo}
-                      >
-                        <video
-                          ref={videoRef}
-                          className="w-full h-full object-cover scale-x-[-1]"
-                          playsInline
-                          muted
-                          autoPlay
-                        />
-                        {!photo && (
-                          <>
-                            <div className="absolute inset-0 border-[2px] border-gold/20 rounded-2xl pointer-events-none" />
-                            <div className="absolute top-3 left-3 bg-slate-900/80 px-2 py-0.5 rounded-full text-[9px] font-bold text-gold tracking-wider flex items-center gap-1">
-                              <span className="h-1.5 w-1.5 rounded-full bg-gold animate-pulse" /> LIVE
-                            </div>
-                            <button
-                              type="button"
-                              onClick={capturePhoto}
-                              className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-navy hover:bg-navy/80 active:scale-95 text-xs font-semibold text-white px-4 py-2 rounded-xl transition-all cursor-pointer shadow-lg shadow-navy/30 inline-flex items-center gap-1.5"
-                            >
-                              <Camera className="h-4 w-4" /> Capture Photo
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
+                  {/* Fixed aspect box: both live + preview are position:absolute so the
+                      frame never grows/shifts when a photo is taken. */}
+                  <div className="relative w-full aspect-[4/3] rounded-2xl overflow-hidden bg-slate-950 border border-slate-800">
+                    <canvas ref={canvasRef} className="hidden" aria-hidden />
 
-                    {photo && (
-                      <div className="relative w-full h-full">
-                        <img
-                          src={photo}
-                          alt="Verification Preview"
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                        <button
-                          type="button"
-                          onClick={retakePhoto}
-                          className="absolute bottom-3 right-3 bg-slate-900/90 hover:bg-slate-900 border border-slate-700 text-xs font-semibold text-white px-3 py-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                        >
-                          <RefreshCw className="h-3 w-3" /> Retake
-                        </button>
-                      </div>
-                    )}
-
-                    {!photo && cameraError && (
-                      <div className="p-6 text-center space-y-3">
-                        <AlertTriangle className="h-10 w-10 text-gold mx-auto" />
+                    {cameraError && !photo ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <AlertTriangle className="h-10 w-10 text-gold" />
                         <p className="text-xs text-slate-400 max-w-xs">{cameraError}</p>
                         <button
                           type="button"
@@ -471,8 +423,61 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
                           <RefreshCw className="h-3 w-3" /> Retry Permission
                         </button>
                       </div>
+                    ) : (
+                      <>
+                        {/* Live camera — always mounted (hidden under preview) so Retake keeps the stream */}
+                        <video
+                          ref={videoRef}
+                          className={`absolute inset-0 h-full w-full object-cover object-center scale-x-[-1] ${
+                            photo ? "opacity-0 pointer-events-none" : "opacity-100"
+                          }`}
+                          playsInline
+                          muted
+                          autoPlay
+                        />
+
+                        {!photo && (
+                          <>
+                            <div className="absolute inset-0 border-[2px] border-gold/20 rounded-2xl pointer-events-none z-[1]" />
+                            <div className="absolute top-3 left-3 z-[2] bg-slate-900/80 px-2 py-0.5 rounded-full text-[9px] font-bold text-gold tracking-wider flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-gold animate-pulse" /> LIVE
+                            </div>
+                            <button
+                              type="button"
+                              onClick={capturePhoto}
+                              className="absolute bottom-4 left-1/2 z-[2] -translate-x-1/2 bg-navy hover:bg-navy/80 active:scale-95 text-xs font-semibold text-white px-4 py-2 rounded-xl transition-all cursor-pointer shadow-lg shadow-navy/30 inline-flex items-center gap-1.5"
+                            >
+                              <Camera className="h-4 w-4" /> Capture Photo
+                            </button>
+                          </>
+                        )}
+
+                        {photo && (
+                          <>
+                            <img
+                              src={photo}
+                              alt="Verification preview"
+                              className="absolute inset-0 h-full w-full object-cover object-center"
+                              referrerPolicy="no-referrer"
+                            />
+                            <button
+                              type="button"
+                              onClick={retakePhoto}
+                              className="absolute bottom-4 left-1/2 z-[3] -translate-x-1/2 bg-white text-slate-900 hover:bg-slate-100 border border-slate-200 text-xs font-bold px-4 py-2.5 rounded-xl transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-lg"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" /> Retake photo
+                            </button>
+                          </>
+                        )}
+                      </>
                     )}
                   </div>
+
+                  {photo && (
+                    <p className="mt-2 text-[11px] text-slate-500 text-center">
+                      Looking good? Submit below, or retake if needed.
+                    </p>
+                  )}
                 </div>
 
                 {/* Submit Error */}
