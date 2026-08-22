@@ -22,6 +22,8 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** Keeps the MediaStream across retakes so unmounting the <video> does not lose the camera. */
+  const streamRef = useRef<MediaStream | null>(null);
 
   // initial=true only on first load (shows spinner). Polls stay silent so the
   // camera and form are never interrupted every 20s.
@@ -114,29 +116,50 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
   };
 
   // 2. Browser Camera Controls
+  const attachStreamToVideo = (mediaStream: MediaStream) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.srcObject !== mediaStream) {
+      video.srcObject = mediaStream;
+    }
+    video.play().catch((err) => console.error("Video play interrupted", err));
+  };
+
   const startCamera = async () => {
     setCameraError(null);
     try {
+      // Reuse an existing live stream when possible (e.g. after Retake).
+      if (streamRef.current && streamRef.current.getVideoTracks().some((t) => t.readyState === "live")) {
+        setStream(streamRef.current);
+        // video may have just remounted — attach on next paint
+        requestAnimationFrame(() => attachStreamToVideo(streamRef.current!));
+        return;
+      }
+
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false
+        audio: false,
       });
+      streamRef.current = mediaStream;
       setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.play().catch(err => console.error("Video play interrupted", err));
-      }
+      requestAnimationFrame(() => attachStreamToVideo(mediaStream));
     } catch (err: any) {
       console.error("Camera access error:", err);
-      setCameraError("Camera permission was denied or is unavailable. Please grant camera permissions to complete check-in.");
+      setCameraError(
+        "Camera permission was denied or is unavailable. Please grant camera permissions to complete check-in."
+      );
     }
   };
 
   const stopCamera = () => {
-    const active = stream || (videoRef.current?.srcObject as MediaStream | null);
+    const active =
+      streamRef.current ||
+      stream ||
+      (videoRef.current?.srcObject as MediaStream | null);
     if (active) {
       active.getTracks().forEach((track) => track.stop());
     }
+    streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setStream(null);
   };
@@ -147,14 +170,19 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
 
-      if (ctx) {
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        
-        // Draw the current video frame
+      if (ctx && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // Live preview uses CSS scale-x-[-1] (mirror). Match that in the
+        // captured image so the photo does not appear "turned" vs what the
+        // student saw on screen.
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        // Extract base64
+        ctx.restore();
+
         const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
         setPhoto(dataUrl);
       }
@@ -163,7 +191,23 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
 
   const retakePhoto = () => {
     setPhoto(null);
+    setErrorMsg(null);
+    // Re-show live video: stream is still running; re-attach after React paints the <video>.
+    requestAnimationFrame(() => {
+      if (streamRef.current) {
+        attachStreamToVideo(streamRef.current);
+      } else {
+        void startCamera();
+      }
+    });
   };
+
+  // When returning to live view after a photo, ensure the video element has the stream.
+  useEffect(() => {
+    if (!photo && !cameraError && activeSession && streamRef.current) {
+      attachStreamToVideo(streamRef.current);
+    }
+  }, [photo, cameraError, activeSession]);
 
   // 3. Submit Check-in
   const handleCheckIn = async (e: React.FormEvent) => {
@@ -365,13 +409,44 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
                   <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-[4/3] border border-slate-800 flex flex-col items-center justify-center">
                     <canvas ref={canvasRef} className="hidden" />
 
-                    {photo ? (
-                      /* Photo Preview State */
+                    {/* Keep <video> mounted whenever we are not in cameraError so Retake
+                        does not destroy the element and lose the live stream. */}
+                    {!cameraError && (
+                      <div
+                        className={`relative w-full h-full ${photo ? "invisible absolute inset-0 pointer-events-none" : ""}`}
+                        aria-hidden={!!photo}
+                      >
+                        <video
+                          ref={videoRef}
+                          className="w-full h-full object-cover scale-x-[-1]"
+                          playsInline
+                          muted
+                          autoPlay
+                        />
+                        {!photo && (
+                          <>
+                            <div className="absolute inset-0 border-[2px] border-gold/20 rounded-2xl pointer-events-none" />
+                            <div className="absolute top-3 left-3 bg-slate-900/80 px-2 py-0.5 rounded-full text-[9px] font-bold text-gold tracking-wider flex items-center gap-1">
+                              <span className="h-1.5 w-1.5 rounded-full bg-gold animate-pulse" /> LIVE
+                            </div>
+                            <button
+                              type="button"
+                              onClick={capturePhoto}
+                              className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-navy hover:bg-navy/80 active:scale-95 text-xs font-semibold text-white px-4 py-2 rounded-xl transition-all cursor-pointer shadow-lg shadow-navy/30 inline-flex items-center gap-1.5"
+                            >
+                              <Camera className="h-4 w-4" /> Capture Photo
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {photo && (
                       <div className="relative w-full h-full">
-                        <img 
-                          src={photo} 
-                          alt="Verification Preview" 
-                          className="w-full h-full object-cover" 
+                        <img
+                          src={photo}
+                          alt="Verification Preview"
+                          className="w-full h-full object-cover"
                           referrerPolicy="no-referrer"
                         />
                         <button
@@ -382,8 +457,9 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
                           <RefreshCw className="h-3 w-3" /> Retake
                         </button>
                       </div>
-                    ) : cameraError ? (
-                      /* Camera Error State */
+                    )}
+
+                    {!photo && cameraError && (
                       <div className="p-6 text-center space-y-3">
                         <AlertTriangle className="h-10 w-10 text-gold mx-auto" />
                         <p className="text-xs text-slate-400 max-w-xs">{cameraError}</p>
@@ -393,28 +469,6 @@ export default function CheckInPage({ groupId }: CheckInPageProps) {
                           className="bg-navy hover:bg-navy/80 text-xs font-semibold text-white px-3 py-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1.5"
                         >
                           <RefreshCw className="h-3 w-3" /> Retry Permission
-                        </button>
-                      </div>
-                    ) : (
-                      /* Camera Live View */
-                      <div className="relative w-full h-full">
-                        <video
-                          ref={videoRef}
-                          className="w-full h-full object-cover scale-x-[-1]"
-                          playsInline
-                          muted
-                        />
-                        <div className="absolute inset-0 border-[2px] border-gold/20 rounded-2xl pointer-events-none" />
-                        <div className="absolute top-3 left-3 bg-slate-900/80 px-2 py-0.5 rounded-full text-[9px] font-bold text-gold tracking-wider flex items-center gap-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-gold animate-pulse" /> LIVE
-                        </div>
-                        
-                        <button
-                          type="button"
-                          onClick={capturePhoto}
-                          className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-navy hover:bg-navy/80 active:scale-95 text-xs font-semibold text-white px-4 py-2 rounded-xl transition-all cursor-pointer shadow-lg shadow-navy/30 inline-flex items-center gap-1.5"
-                        >
-                          <Camera className="h-4 w-4" /> Capture Photo
                         </button>
                       </div>
                     )}
