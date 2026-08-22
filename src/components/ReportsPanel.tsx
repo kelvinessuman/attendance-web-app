@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
-  BarChart3, Calendar, Clock, User, CheckCircle2, XCircle, ArrowLeft, RefreshCw, FileText, Download, Award 
+  BarChart3, Calendar, CheckCircle2, XCircle, ArrowLeft, RefreshCw, FileText, Download, Award, Search, X
 } from "lucide-react";
 import { DailyReport, CumulativeReport } from "../types";
 import { motion, AnimatePresence } from "motion/react";
@@ -20,6 +20,43 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
   const [selectedDailyReport, setSelectedDailyReport] = useState<DailyReport | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  /** Draft in the input; applied query filters the tables. */
+  const [studentIdDraft, setStudentIdDraft] = useState("");
+  const [studentIdQuery, setStudentIdQuery] = useState("");
+
+  const normalizeId = (id: string) => id.trim().toUpperCase();
+
+  const applyStudentSearch = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setStudentIdQuery(normalizeId(studentIdDraft));
+  };
+
+  const clearStudentSearch = () => {
+    setStudentIdDraft("");
+    setStudentIdQuery("");
+  };
+
+  const filteredDailyRecords = useMemo(() => {
+    if (!selectedDailyReport) return [];
+    const q = studentIdQuery;
+    if (!q) return selectedDailyReport.records;
+    return selectedDailyReport.records.filter(
+      (r) =>
+        normalizeId(r.studentId).includes(q) ||
+        (r.name || "").toLowerCase().includes(q.toLowerCase())
+    );
+  }, [selectedDailyReport, studentIdQuery]);
+
+  const filteredCumulativeRecords = useMemo(() => {
+    if (!cumulativeReport) return [];
+    const q = studentIdQuery;
+    if (!q) return cumulativeReport.records;
+    return cumulativeReport.records.filter(
+      (r) =>
+        normalizeId(r.studentId).includes(q) ||
+        (r.name || "").toLowerCase().includes(q.toLowerCase())
+    );
+  }, [cumulativeReport, studentIdQuery]);
 
   const fetchReports = async () => {
     setLoading(true);
@@ -142,6 +179,49 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
           {errorMsg}
         </Alert>
       )}
+
+      {/* Search student attendance by ID */}
+      <form
+        onSubmit={applyStudentSearch}
+        className="mb-6 flex flex-col sm:flex-row gap-2 sm:items-center"
+      >
+        <label htmlFor="student-id-search" className="sr-only">
+          Search by student ID
+        </label>
+        <div className="relative flex-1 max-w-md">
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none"
+            aria-hidden
+          />
+          <input
+            id="student-id-search"
+            type="search"
+            value={studentIdDraft}
+            onChange={(e) => setStudentIdDraft(e.target.value)}
+            placeholder="Search by student ID (e.g. STU1004)"
+            className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono uppercase tracking-wide text-slate-800 placeholder:normal-case placeholder:tracking-normal placeholder:font-sans focus:outline-none focus-visible:ring-2 focus-visible:ring-navy focus-visible:border-navy"
+            autoComplete="off"
+          />
+        </div>
+        <div className="flex gap-2">
+          <Button type="submit" variant="primary" size="md">
+            <Search className="h-4 w-4" aria-hidden />
+            Search
+          </Button>
+          {studentIdQuery && (
+            <Button type="button" variant="secondary" size="md" onClick={clearStudentSearch}>
+              <X className="h-4 w-4" aria-hidden />
+              Clear
+            </Button>
+          )}
+        </div>
+        {studentIdQuery && (
+          <p className="text-xs text-slate-500 sm:ml-1">
+            Showing matches for{" "}
+            <span className="font-mono font-semibold text-navy">{studentIdQuery}</span>
+          </p>
+        )}
+      </form>
 
       {/* Tabs Switcher */}
       <div className="flex border-b border-slate-100 mb-6">
@@ -301,7 +381,16 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
 
                     {/* Attendance Records Table */}
                     <div className="space-y-3.5">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Attendance Register Log</h4>
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          Attendance Register Log
+                        </h4>
+                        {studentIdQuery && (
+                          <p className="text-xs text-slate-500">
+                            {filteredDailyRecords.length} of {selectedDailyReport.records.length} shown
+                          </p>
+                        )}
+                      </div>
                       <div className="overflow-x-auto">
                         <table className="min-w-full divide-y divide-slate-100">
                           <thead>
@@ -314,7 +403,16 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-50 text-xs text-slate-700">
-                            {selectedDailyReport.records.map((r) => (
+                            {filteredDailyRecords.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                                  {studentIdQuery
+                                    ? `No records match “${studentIdQuery}” in this session.`
+                                    : "No attendance records for this session."}
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredDailyRecords.map((r) => (
                               <tr key={r.studentId} className="hover:bg-slate-50/50">
                                 <td className="px-4 py-3 font-mono font-semibold text-navy">{r.studentId}</td>
                                 <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
@@ -357,7 +455,8 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                                   )}
                                 </td>
                               </tr>
-                            ))}
+                              ))
+                            )}
                           </tbody>
                         </table>
                       </div>
@@ -418,6 +517,12 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                   </div>
 
                   {/* Complete Cumulative Table */}
+                  <div className="space-y-2">
+                    {studentIdQuery && (
+                      <p className="text-xs text-slate-500">
+                        {filteredCumulativeRecords.length} of {cumulativeReport.records.length} students shown
+                      </p>
+                    )}
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-slate-100">
                       <thead>
@@ -432,7 +537,16 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-50 text-xs text-slate-700">
-                        {cumulativeReport.records.map((rec) => {
+                        {filteredCumulativeRecords.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                              {studentIdQuery
+                                ? `No students match “${studentIdQuery}”.`
+                                : "No cumulative records yet."}
+                            </td>
+                          </tr>
+                        ) : (
+                        filteredCumulativeRecords.map((rec) => {
                           const totalSess = rec.presentCount + rec.absentCount;
                           return (
                             <tr key={rec.studentId} className="hover:bg-slate-50/50">
@@ -468,9 +582,11 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                               </td>
                             </tr>
                           );
-                        })}
+                        })
+                        )}
                       </tbody>
                     </table>
+                  </div>
                   </div>
 
                 </div>
