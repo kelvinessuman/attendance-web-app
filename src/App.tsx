@@ -383,6 +383,7 @@ function ReportsRoute() {
   const { groupId } = useParams<{ groupId: string }>();
   const navigate = useNavigate();
   const [groupName, setGroupName] = useState("");
+  const [groupDescription, setGroupDescription] = useState("");
 
   useEffect(() => {
     if (!groupId) return;
@@ -391,8 +392,9 @@ function ReportsRoute() {
       try {
         const res = await fetch(`/api/groups/${groupId}/details`, { credentials: "include" });
         const data = await res.json();
-        if (!cancelled && res.ok && data.group?.name) {
-          setGroupName(data.group.name);
+        if (!cancelled && res.ok && data.group) {
+          setGroupName(data.group.name || "");
+          setGroupDescription(data.group.description || "");
         }
       } catch {
         /* ignore — ReportsPanel still works without the name */
@@ -415,6 +417,7 @@ function ReportsRoute() {
       <ReportsPanel
         groupId={groupId}
         groupName={groupName}
+        groupDescription={groupDescription}
         onBack={() => navigate(`/groups/${groupId}`)}
       />
     </motion.div>
