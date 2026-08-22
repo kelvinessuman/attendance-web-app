@@ -27,12 +27,33 @@ if (isProd) {
   app.set("trust proxy", 1);
 }
 
+// Content-Security-Policy: enforced in production, report-only in dev so local
+// Vite HMR is not blocked while we still exercise the policy.
+const cspDirectives: Record<string, string[]> = {
+  defaultSrc: ["'self'"],
+  scriptSrc: ["'self'"],
+  styleSrc: ["'self'", "'unsafe-inline'"], // Tailwind / runtime styles
+  imgSrc: ["'self'", "data:", "blob:", "https:"], // QR data URLs, check-in photos, logos
+  connectSrc: ["'self'", "https:"],
+  fontSrc: ["'self'", "data:"],
+  objectSrc: ["'none'"],
+  frameAncestors: ["'none'"],
+  baseUri: ["'self'"],
+  formAction: ["'self'"],
+  upgradeInsecureRequests: isProd ? [] : null as unknown as string[],
+};
+// Remove null entries helmet does not accept
+if (!isProd) delete (cspDirectives as any).upgradeInsecureRequests;
+
 app.use(
   helmet({
-    // Disabled because Vite/React inline styles and the camera-capture canvas
-    // flow don't fit a strict default CSP without a larger rework; the other
-    // helmet protections (HSTS, no-sniff, frameguard, etc.) still apply.
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: cspDirectives as any,
+      reportOnly: !isProd,
+    },
+    crossOriginEmbedderPolicy: false, // avoid breaking camera / blob photo preview
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   })
 );
 
@@ -91,9 +112,89 @@ const checkinLimiterByStudent = rateLimit({
   },
 });
 
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ limit: "15mb", extended: true }));
+// Body size: keep general API small; check-in photos are capped again in the
+// route (base64 length). 2mb is enough for a compressed JPEG + JSON fields.
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ limit: "2mb", extended: true }));
 app.use(cookieParser());
+
+// ---------------------------------------------------------------------------
+// Startup secrets / config validation (fail fast in production)
+// ---------------------------------------------------------------------------
+function validateProductionEnv() {
+  if (!isProd) return;
+  const missing: string[] = [];
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === "dev-only-insecure-secret-change-me") {
+    missing.push("JWT_SECRET (strong random value)");
+  }
+  if (!process.env.DATABASE_URL && !(process.env.PGHOST && process.env.PGPASSWORD)) {
+    missing.push("DATABASE_URL (or PG* connection vars)");
+  }
+  if (!process.env.APP_URL || !/^https:\/\//i.test(process.env.APP_URL)) {
+    missing.push("APP_URL (https:// your public origin, no trailing slash)");
+  }
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn(
+      "[config] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing — check-in photos will fail until set."
+    );
+  }
+  if (missing.length) {
+    console.error(
+      "\n[FATAL] Production config incomplete:\n  - " + missing.join("\n  - ") + "\n"
+    );
+    process.exit(1);
+  }
+}
+validateProductionEnv();
+
+/** Simple password policy for new / changed passwords (not legacy hashes). */
+function validateNewPassword(password: string): string | null {
+  if (typeof password !== "string" || password.length < 10) {
+    return "Password must be at least 10 characters.";
+  }
+  if (password.length > 128) {
+    return "Password is too long.";
+  }
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    return "Password must include at least one letter and one number.";
+  }
+  const lowered = password.toLowerCase();
+  const common = ["password", "password1", "12345678", "1234567890", "qwerty123", "admin12345"];
+  if (common.some((c) => lowered === c || lowered.includes("password"))) {
+    return "Password is too common. Choose a stronger password.";
+  }
+  return null;
+}
+
+/** In-memory failed-login tracker (per process). Complements rate limits. */
+const failedLogins = new Map<string, { count: number; firstAt: number }>();
+const FAILED_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const FAILED_LOGIN_LOCK_THRESHOLD = 8;
+
+function noteFailedLogin(key: string) {
+  const now = Date.now();
+  const cur = failedLogins.get(key);
+  if (!cur || now - cur.firstAt > FAILED_LOGIN_WINDOW_MS) {
+    failedLogins.set(key, { count: 1, firstAt: now });
+    return 1;
+  }
+  cur.count += 1;
+  return cur.count;
+}
+
+function clearFailedLogin(key: string) {
+  failedLogins.delete(key);
+}
+
+function isLoginSoftLocked(key: string): boolean {
+  const cur = failedLogins.get(key);
+  if (!cur) return false;
+  if (Date.now() - cur.firstAt > FAILED_LOGIN_WINDOW_MS) {
+    failedLogins.delete(key);
+    return false;
+  }
+  return cur.count >= FAILED_LOGIN_LOCK_THRESHOLD;
+}
 
 // // POSTGRESQL CONNECTION
 // 
@@ -600,6 +701,18 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   }
 
   const normalizedEmail = String(email).trim().toLowerCase();
+  const failKey = `${req.ip || "unknown"}:${normalizedEmail}`;
+
+  if (isLoginSoftLocked(failKey)) {
+    await writeAuditLog({
+      action: "auth.login_locked",
+      detail: { email: normalizedEmail },
+      req,
+    });
+    return res.status(429).json({
+      error: "Too many failed sign-in attempts for this account. Try again in about 15 minutes.",
+    });
+  }
 
   try {
     const result = await pool.query(
@@ -607,12 +720,25 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
       [normalizedEmail]
     );
     if (result.rows.length === 0) {
+      noteFailedLogin(failKey);
+      await writeAuditLog({
+        action: "auth.login_failed",
+        detail: { email: normalizedEmail, reason: "unknown_email" },
+        req,
+      });
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
     const user = result.rows[0];
     const matches = await bcrypt.compare(password, user.password_hash);
     if (!matches) {
+      const n = noteFailedLogin(failKey);
+      await writeAuditLog({
+        actor: { id: user.id, email: user.email, fullName: user.full_name, role: user.role === "admin" ? "admin" : "user" },
+        action: "auth.login_failed",
+        detail: { email: normalizedEmail, reason: "bad_password", attempts: n },
+        req,
+      });
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
@@ -623,11 +749,19 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     }
 
     if (user.is_active === false) {
+      await writeAuditLog({
+        actor: { id: user.id, email: user.email, fullName: user.full_name, role: user.role === "admin" ? "admin" : "user" },
+        action: "auth.login_blocked_inactive",
+        detail: { email: normalizedEmail },
+        req,
+      });
       return res.status(403).json({ error: "This account has been deactivated. Contact your administrator." });
     }
     if (user.password_expires_at && new Date(user.password_expires_at) < new Date()) {
       return res.status(403).json({ error: "Your temporary password has expired. Contact your administrator for a new one." });
     }
+
+    clearFailedLogin(failKey);
 
     const payload: AuthPayload = {
       id: user.id,
@@ -636,6 +770,12 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
       role: (user.role === "admin" ? "admin" : "user") as "admin" | "user",
     };
     setAuthCookie(res, payload);
+    await writeAuditLog({
+      actor: payload,
+      action: "auth.login_success",
+      detail: { role: payload.role },
+      req,
+    });
     res.json({
       success: true,
       user: payload,
@@ -700,8 +840,9 @@ app.post("/api/auth/change-password", requireAuth, async (req, res) => {
   if (!currentPassword || !newPassword || !confirmPassword) {
     return res.status(400).json({ error: "Current password, new password, and confirm password are required." });
   }
-  if (newPassword.length < 8) {
-    return res.status(400).json({ error: "New password must be at least 8 characters long." });
+  const pwdErr = validateNewPassword(String(newPassword));
+  if (pwdErr) {
+    return res.status(400).json({ error: pwdErr });
   }
   if (newPassword !== confirmPassword) {
     return res.status(400).json({ error: "New password and confirm password do not match." });
@@ -784,11 +925,13 @@ app.post("/api/admin/authorize", requireAuth, requireAdmin, async (req, res) => 
     const passwordHash = await bcrypt.hash(tempPassword, 10);
     const id = genId();
     const name = (fullName && String(fullName).trim()) || normalizedEmail.split("@")[0];
+    // Temp passwords expire in 24h — reduces risk if shared carelessly.
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     await pool.query(
-      `INSERT INTO users (id, email, full_name, password_hash, role, is_active, temp_password, email_verified, created_by_admin)
-       VALUES ($1, $2, $3, $4, 'user', true, true, true, $5)`,
-      [id, normalizedEmail, name, passwordHash, admin.id]
+      `INSERT INTO users (id, email, full_name, password_hash, role, is_active, temp_password, email_verified, created_by_admin, password_expires_at)
+       VALUES ($1, $2, $3, $4, 'user', true, true, true, $5, $6)`,
+      [id, normalizedEmail, name, passwordHash, admin.id, expiresAt]
     );
 
     await pool.query(
@@ -797,11 +940,21 @@ app.post("/api/admin/authorize", requireAuth, requireAdmin, async (req, res) => 
       [genId(), id, admin.id, "Initial authorization"]
     );
 
+    await writeAuditLog({
+      actor: admin,
+      action: "admin.authorize_user",
+      entityType: "user",
+      entityId: id,
+      detail: { email: normalizedEmail },
+      req,
+    });
+
     res.json({
       success: true,
       email: normalizedEmail,
       temporaryPassword: tempPassword,
-      message: "User authorized. Share the temporary password securely. It will not be shown again.",
+      passwordExpiresAt: expiresAt,
+      message: "User authorized. Share the temporary password securely (expires in 24 hours). It will not be shown again.",
     });
   } catch (err: any) {
     console.error("[admin/authorize]", err);
@@ -881,10 +1034,11 @@ app.post("/api/admin/regenerate/:userId", requireAuth, requireAdmin, async (req,
 
     const tempPassword = generateTempPassword(10);
     const passwordHash = await bcrypt.hash(tempPassword, 10);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     await pool.query(
-      `UPDATE users SET password_hash = $1, temp_password = true, is_active = true WHERE id = $2`,
-      [passwordHash, userId]
+      `UPDATE users SET password_hash = $1, temp_password = true, is_active = true, password_expires_at = $2 WHERE id = $3`,
+      [passwordHash, expiresAt, userId]
     );
     await pool.query(
       `INSERT INTO admin_password_logs (id, user_id, generated_by, notes)
@@ -892,14 +1046,55 @@ app.post("/api/admin/regenerate/:userId", requireAuth, requireAdmin, async (req,
       [genId(), userId, admin.id, "Password regenerated"]
     );
 
+    await writeAuditLog({
+      actor: admin,
+      action: "admin.regenerate_password",
+      entityType: "user",
+      entityId: userId,
+      detail: { email: existing.rows[0].email },
+      req,
+    });
+
     res.json({
       success: true,
       email: existing.rows[0].email,
       temporaryPassword: tempPassword,
+      passwordExpiresAt: expiresAt,
     });
   } catch (err: any) {
     console.error("[admin/regenerate]", err);
     res.status(500).json({ error: "Failed to regenerate password." });
+  }
+});
+
+/** Recent security-relevant audit events (admin only). */
+app.get("/api/admin/audit-log", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "50"), 10) || 50, 1), 200);
+    const result = await pool.query(
+      `SELECT id, actor_user_id, actor_email, action, group_id, entity_type, entity_id, detail, ip, created_at
+       FROM audit_log
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({
+      events: result.rows.map((r: any) => ({
+        id: r.id,
+        actorUserId: r.actor_user_id,
+        actorEmail: r.actor_email,
+        action: r.action,
+        groupId: r.group_id,
+        entityType: r.entity_type,
+        entityId: r.entity_id,
+        detail: r.detail,
+        ip: r.ip,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (err: any) {
+    console.error("[admin/audit-log]", err);
+    res.status(500).json({ error: "Failed to load audit log." });
   }
 });
 
