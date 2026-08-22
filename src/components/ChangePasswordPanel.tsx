@@ -19,7 +19,7 @@ export default function ChangePasswordPanel() {
     setError(null);
 
     if (newPassword.length < 8) {
-      setError("New password must be at least 8 characters.");
+      setError("New password must be at least 10 characters and include a letter and a number.");
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -85,7 +85,7 @@ export default function ChangePasswordPanel() {
             autoComplete="new-password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
-            hint="At least 8 characters"
+            hint="At least 10 characters, with a letter and a number"
           />
           <Input
             label="Confirm new password"
