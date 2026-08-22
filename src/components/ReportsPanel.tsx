@@ -1,18 +1,30 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { 
-  BarChart3, Calendar, CheckCircle2, XCircle, ArrowLeft, RefreshCw, FileText, Download, Award, Search, X
+  BarChart3, Calendar, CheckCircle2, XCircle, ArrowLeft, RefreshCw, FileText, Download, Award, Search, X, FileDown
 } from "lucide-react";
 import { DailyReport, CumulativeReport } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Alert, Button, EmptyState, Spinner } from "./ui";
+import { useAuth } from "../lib/auth";
+import {
+  downloadDailyAttendancePdf,
+  downloadCumulativeAttendancePdf,
+} from "../lib/academicReportPdf";
 
 interface ReportsPanelProps {
   groupId: string;
   groupName: string;
+  groupDescription?: string;
   onBack: () => void;
 }
 
-export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPanelProps) {
+export default function ReportsPanel({
+  groupId,
+  groupName,
+  groupDescription = "",
+  onBack,
+}: ReportsPanelProps) {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [dailyReports, setDailyReports] = useState<DailyReport[]>([]);
   const [cumulativeReport, setCumulativeReport] = useState<CumulativeReport | null>(null);
@@ -23,8 +35,64 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
   /** Draft in the input; applied query filters the tables. */
   const [studentIdDraft, setStudentIdDraft] = useState("");
   const [studentIdQuery, setStudentIdQuery] = useState("");
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   const normalizeId = (id: string) => id.trim().toUpperCase();
+
+  const facilitatorName = user?.fullName || user?.email || "Facilitator";
+
+  const handleDownloadDailyPdf = async () => {
+    if (!selectedDailyReport) return;
+    setPdfLoading(true);
+    setErrorMsg(null);
+    try {
+      const rows = studentIdQuery ? filteredDailyRecords : selectedDailyReport.records;
+      await downloadDailyAttendancePdf({
+        meta: {
+          groupName: groupName || "Attendance Group",
+          groupDescription,
+          reportDate: selectedDailyReport.date,
+          facilitatorName,
+          facilitatorEmail: user?.email,
+          generatedAt: new Date(),
+        },
+        stats: selectedDailyReport.stats,
+        records: rows,
+        sessionId: selectedDailyReport.sessionId,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err?.message || "Failed to generate PDF. Ensure jspdf is installed (npm install).");
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
+  const handleDownloadCumulativePdf = async () => {
+    if (!cumulativeReport) return;
+    setPdfLoading(true);
+    setErrorMsg(null);
+    try {
+      const rows = studentIdQuery ? filteredCumulativeRecords : cumulativeReport.records;
+      await downloadCumulativeAttendancePdf({
+        meta: {
+          groupName: groupName || "Attendance Group",
+          groupDescription,
+          reportDate: new Date().toISOString().slice(0, 10),
+          facilitatorName,
+          facilitatorEmail: user?.email,
+          generatedAt: new Date(),
+        },
+        stats: cumulativeReport.stats,
+        records: rows,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err?.message || "Failed to generate PDF. Ensure jspdf is installed (npm install).");
+    } finally {
+      setPdfLoading(false);
+    }
+  };
 
   const applyStudentSearch = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -340,12 +408,24 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                         </p>
                       </div>
 
-                      <button
-                        onClick={() => handleDownloadCSV(selectedDailyReport)}
-                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer self-start sm:self-auto"
-                      >
-                        <Download className="h-3.5 w-3.5" /> Download CSV
-                      </button>
+                      <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={handleDownloadDailyPdf}
+                          disabled={pdfLoading}
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-navy hover:bg-navy/90 disabled:opacity-50 text-white font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                        >
+                          <FileDown className="h-3.5 w-3.5" />
+                          {pdfLoading ? "Preparing PDF…" : "Download PDF"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadCSV(selectedDailyReport)}
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5" /> CSV
+                        </button>
+                      </div>
                     </div>
 
                     {/* Live indicator alert banner */}
@@ -508,10 +588,20 @@ export default function ReportsPanel({ groupId, groupName, onBack }: ReportsPane
                         </div>
                       </div>
                       <button
+                        type="button"
+                        onClick={handleDownloadCumulativePdf}
+                        disabled={pdfLoading}
+                        className="flex items-center gap-1.5 text-xs font-bold text-white bg-navy hover:bg-navy/90 disabled:opacity-50 px-3 py-2 rounded-xl transition-colors cursor-pointer shrink-0"
+                      >
+                        <FileDown className="h-3.5 w-3.5" />
+                        {pdfLoading ? "PDF…" : "Download PDF"}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDownloadCumulativeCSV(cumulativeReport)}
                         className="flex items-center gap-1.5 text-xs font-bold text-navy bg-slate-50 hover:bg-slate-100 border border-slate-200/70 px-3 py-2 rounded-xl transition-colors cursor-pointer shrink-0"
                       >
-                        <Download className="h-3.5 w-3.5" /> Download CSV
+                        <Download className="h-3.5 w-3.5" /> CSV
                       </button>
                     </div>
                   </div>
